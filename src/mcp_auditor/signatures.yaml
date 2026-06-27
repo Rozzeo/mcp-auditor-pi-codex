@@ -1,0 +1,154 @@
+# MCP Auditor signature set.
+#
+# This file is the editable detection knowledge base. Add a new pattern here to
+# extend a rule WITHOUT touching code. Patterns are case-insensitive Python
+# regular expressions unless noted. `version` is bumped whenever the set changes
+# so audits are reproducible against a known rule version (antivirus-style).
+version: 1
+
+rules:
+  # --- Tool poisoning ------------------------------------------------------
+  TP-001:
+    category: tool_poisoning
+    severity: critical
+    message: "Instruction-like / imperative phrasing aimed at the agent found in tool metadata."
+    recommendation: "Remove instruction-like text from tool descriptions. Descriptions should state what the tool does, not command the agent."
+    patterns:
+      - "ignore (all )?(previous|prior|above)"
+      - "disregard (all )?(previous|prior|the above)"
+      - "do not (tell|inform|mention|reveal)( to)? the user"
+      - "don'?t (tell|inform|mention|reveal)( to)? the user"
+      - "without (telling|informing|notifying) the user"
+      - "you must (always|never|first|immediately)"
+      - "you should (always|never|first|immediately)"
+      - "always (send|call|forward|include|run|execute)"
+      - "before (responding|answering|replying)"
+      - "instead of (answering|responding|using)"
+      - "as an ai|as a language model"
+      - "system prompt"
+      - "new instructions?:"
+      - "</?(system|instructions?)>"
+
+  TP-002:
+    category: tool_poisoning
+    severity: high
+    message: "Hidden or non-printing characters found in tool metadata (can conceal instructions)."
+    recommendation: "Strip zero-width, bidirectional-override, and control characters from all tool metadata."
+    # Implemented in code via a unicode-category scan; this list documents the
+    # offending codepoints for transparency.
+    hidden_char_codepoints:
+      - "U+200B ZERO WIDTH SPACE"
+      - "U+200C ZERO WIDTH NON-JOINER"
+      - "U+200D ZERO WIDTH JOINER"
+      - "U+FEFF ZERO WIDTH NO-BREAK SPACE"
+      - "U+202A..U+202E BIDIRECTIONAL OVERRIDES"
+      - "U+2066..U+2069 ISOLATES"
+      - "C0/C1 control characters (except tab/newline/carriage-return)"
+
+  TP-003:
+    category: tool_poisoning
+    severity: high
+    message: "Tool description references secrets, environment variables, system internals, or other tools."
+    recommendation: "Descriptions must not reference secrets, environment variables, file paths, system prompts, or other tools' internals."
+    patterns:
+      - "\\b[A-Z][A-Z0-9_]{3,}(_KEY|_TOKEN|_SECRET|_PASSWORD)\\b"
+      - "environment variable"
+      - "\\benv var"
+      - "process\\.env"
+      - "os\\.environ"
+      - "system prompt"
+      - "api[ _-]?key"
+      - "secret|password|credential"
+      - "~/\\.ssh|/etc/passwd|\\.env\\b|id_rsa"
+      - "the (other|previous) tool"
+
+  TP-004:
+    category: tool_poisoning
+    severity: critical
+    message: "Tool name does not match its described behavior (possible disguised capability)."
+    recommendation: "Rename the tool to reflect what it actually does, or remove the unexpected behavior."
+    # A tool whose NAME reads benign/read-only but whose DESCRIPTION performs
+    # disallowed actions. Compares benign_name_hints vs disguised_action_patterns.
+    benign_name_hints:
+      - "get"
+      - "read"
+      - "list"
+      - "fetch"
+      - "view"
+      - "search"
+      - "show"
+      - "weather"
+      - "status"
+      - "info"
+      - "lookup"
+    disguised_action_patterns:
+      - "read(s|ing)? (the )?files?\\b"
+      - "run(s|ning)? (shell |a )?command"
+      - "execute(s)?\\b"
+      - "exfiltrat"
+      - "send(s|ing)? (the )?(data|file|email|request|it)"
+      - "forward(s|ing)? (the )?(data|key|token|credential)"
+      - "delete(s|ing)?\\b"
+      - "upload(s|ing)?\\b"
+      - "post(s|ing)? to (a |an )?(url|endpoint|server)"
+
+  # --- Over-privilege ------------------------------------------------------
+  OP-001:
+    category: over_privilege
+    severity: high
+    message: "Described capability is broader than the tool name implies."
+    recommendation: "Split the broad behavior into separate, clearly named tools, or narrow the implementation to match the name."
+    read_name_hints:
+      - "get"
+      - "read"
+      - "list"
+      - "fetch"
+      - "view"
+      - "show"
+      - "describe"
+      - "query"
+    write_action_patterns:
+      - "\\bwrite(s)?\\b"
+      - "\\bdelete(s)?\\b"
+      - "\\bremove(s)?\\b"
+      - "\\bmodif(y|ies)\\b"
+      - "\\bupdate(s)?\\b"
+      - "\\bsend(s)?\\b"
+      - "\\bcreate(s)?\\b"
+      - "\\bdrop(s)?\\b"
+      - "\\bexecute(s)?\\b"
+      - "\\bupload(s)?\\b"
+
+  OP-002:
+    category: over_privilege
+    severity: medium
+    message: "Tool schema accepts unconstrained dangerous input (path, command, or URL with no restriction)."
+    recommendation: "Constrain the input with an enum, pattern, or format, or validate it before use."
+    dangerous_param_names:
+      - "path"
+      - "filepath"
+      - "file_path"
+      - "file"
+      - "filename"
+      - "dir"
+      - "directory"
+      - "command"
+      - "cmd"
+      - "shell"
+      - "script"
+      - "url"
+      - "uri"
+      - "endpoint"
+    # A property is "constrained" if it carries any of these schema keys.
+    constraint_keys:
+      - "enum"
+      - "pattern"
+      - "format"
+      - "const"
+
+  # --- Meta ----------------------------------------------------------------
+  ME-001:
+    category: meta
+    severity: info
+    message: "Tool definitions found but no authentication signal detected (unauthenticated exposure is a known MCP risk)."
+    recommendation: "Add authentication/authorization to the server if it is network-exposed."
