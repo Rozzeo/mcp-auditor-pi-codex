@@ -5,3 +5,13 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# Local workspace artifacts (not part of the project)
+.claude/
+.mcp.json
+SKILL.md
+Model Context Protocol (MCP)_*
+visual-plan.html
+
+# Generated output (mcp-audit intel build-docs)
+mcp-threat-encyclopedia.html
