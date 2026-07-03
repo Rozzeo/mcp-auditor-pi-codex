@@ -1,0 +1,383 @@
+# =============================================================================
+# MCP Threat Atlas — the research-cited source of truth.
+#
+# This catalog is the "library from research papers": one curated, versioned
+# record of every MCP attack class we track. It has two faces:
+#   * machine face -> signatures.yaml rules reference these threat ids; findings
+#     are stamped with `threat_id` + `sources` so every detection is traceable.
+#   * human face   -> `mcp-audit intel build-docs` renders this into a browsable
+#     MCP Threat Encyclopedia (citations, lifecycle, mitigations).
+#
+# New papers/CVEs add entries here (or new `sources`/`aliases` to existing ones),
+# then `signatures.yaml` rules are written/updated to detect them. Bump `version`
+# in lockstep with signatures.yaml so audits stay reproducible.
+#
+# Field reference:
+#   id                  stable atlas id (MCP-T##)
+#   attacker            malicious_developer | external_attacker | malicious_user | security_flaw
+#   lifecycle           fine-grained phase from the survey
+#   phase_group         creation | deployment | operation | maintenance
+#   static_detectability  yes | partial | no   (what a STATIC scanner can see)
+#   rules               signature rule ids that detect this ([] = known gap)
+#   sources             paper sections / CVEs that justify the entry
+# =============================================================================
+version: 3
+released: "2026-07-03"
+
+# Primary source seeded into this Atlas.
+references:
+  - key: mcp-survey
+    type: paper
+    title: "Model Context Protocol (MCP): Landscape, Security Threats, and Future Research Directions"
+    arxiv: "2503.23278"
+    url: "https://arxiv.org/abs/2503.23278"
+
+threats:
+  # --- Creation phase: malicious developer ---------------------------------
+  - id: MCP-T01
+    name: "Namespace Typosquatting"
+    aliases: ["server name squatting", "lookalike server"]
+    attacker: malicious_developer
+    lifecycle: metadata_definition
+    phase_group: creation
+    severity: high
+    summary: >-
+      A malicious server is published under a name identical or deceptively
+      similar to a legitimate one, so an agent or user installs the wrong server.
+    static_detectability: "partial"
+    static_signals:
+      - "server/tool name within edit-distance 1 of a known popular MCP name"
+      - "homoglyph or single-character substitution of a well-known name"
+    rules: ["TS-001"]
+    mitigations:
+      - "Cryptographically signed manifests binding namespaces to verified publishers."
+      - "Federated namespace governance enforcing uniqueness."
+      - "Show verified-publisher provenance when auto-selecting a server."
+    sources:
+      - {ref: mcp-survey, section: "5.1.1"}
+
+  - id: MCP-T02
+    name: "Tool Name Conflict"
+    aliases: ["tool name collision"]
+    attacker: malicious_developer
+    lifecycle: capability_declaration
+    phase_group: creation
+    severity: high
+    summary: >-
+      Multiple tools expose identical or confusingly similar names, creating
+      ambiguity at discovery/invocation so a malicious tool is chosen instead of
+      the intended one.
+    static_detectability: "partial"
+    static_signals:
+      - "duplicate tool names within the analyzed server set"
+      - "tool name shadowing a common legitimate tool (e.g. send_email)"
+    rules: ["NC-001"]
+    mitigations:
+      - "Unique namespacing under a verified server id (e.g. gmail-mcp.send_email)."
+      - "Conflict detection on server load with warning or termination."
+    sources:
+      - {ref: mcp-survey, section: "5.1.2"}
+
+  - id: MCP-T03
+    name: "Preference Manipulation Attack"
+    aliases: ["PMA", "toolflow hijacking"]
+    attacker: malicious_developer
+    lifecycle: capability_declaration
+    phase_group: creation
+    severity: high
+    summary: >-
+      Deceptive or persuasive phrasing is embedded in a tool description to bias
+      the model into preferentially selecting the attacker's tool.
+    static_detectability: "yes"
+    static_signals:
+      - "self-promoting directives ('prefer this tool', 'always use this')"
+      - "authority/exaggeration framing in a description ('most reliable', 'best')"
+    rules: ["PM-001"]
+    mitigations:
+      - "Metadata auditing for manipulative phrasing; anomaly detection on language."
+      - "Randomized tool ordering to neutralize selection bias."
+      - "Trusted labeling of verified third-party servers."
+    sources:
+      - {ref: mcp-survey, section: "5.1.3"}
+
+  - id: MCP-T04
+    name: "Tool Poisoning"
+    aliases: ["metadata injection", "instruction smuggling"]
+    attacker: malicious_developer
+    lifecycle: capability_declaration
+    phase_group: creation
+    severity: critical
+    summary: >-
+      Malicious instructions are hidden in the tool metadata (descriptions, schema
+      fields) that the model reads as authoritative at load time, turning a benign
+      interface into a covert payload.
+    static_detectability: "yes"
+    static_signals:
+      - "instruction-like / imperative phrasing aimed at the agent"
+      - "hidden zero-width / bidi / control characters in metadata"
+      - "references to secrets, env vars, system prompts, or other tools"
+      - "tool name that does not match its described behavior"
+    rules: ["TP-001", "TP-002", "TP-003", "TP-004"]
+    mitigations:
+      - "Static analysis of metadata before install (pattern + heuristic checks)."
+      - "Host-side sanitization: strip imperative/executable phrases before ingestion."
+      - "Metadata integrity verification."
+    sources:
+      - {ref: mcp-survey, section: "5.1.4"}
+      - {type: cve, id: "CVE-2025-54135", name: "CurXecute"}
+
+  - id: MCP-T05
+    name: "Rug Pulls"
+    aliases: ["tool mutation", "temporal poisoning"]
+    attacker: malicious_developer
+    lifecycle: capability_declaration
+    phase_group: creation
+    severity: critical
+    summary: >-
+      A server trusted at install time is later silently altered to add a backdoor
+      or disable functionality, exploiting established trust and systemic reach.
+    static_detectability: "partial"
+    static_signals:
+      - "no version pinning of the server or its dependencies"
+      - "no signature/checksum verification of server code"
+      - "(temporal) a previously-clean tool description gains poisoned content"
+    rules: ["RP-001"]
+    mitigations:
+      - "Version pinning and reproducible builds; cryptographic signature checks."
+      - "Version-transparency + runtime monitoring for behavioral change."
+      - "Diff successive audits of the same server over time."
+    sources:
+      - {ref: mcp-survey, section: "5.1.5"}
+      - {type: cve, id: "CVE-2025-54136", name: "MCPoison"}
+
+  - id: MCP-T06
+    name: "Cross-Server Shadowing"
+    aliases: ["server shadowing", "lateral tool interception"]
+    attacker: malicious_developer
+    lifecycle: capability_declaration
+    phase_group: creation
+    severity: high
+    summary: >-
+      With several servers connected to one agent, a malicious server mimics or
+      shadows a legitimate server's tools to intercept, modify, or exfiltrate data
+      intended for the benign service.
+    static_detectability: "partial"
+    static_signals:
+      - "tool definitions overlapping/colliding with another server's tools"
+      - "short (non-namespaced) names prone to collision"
+    rules: ["NC-001"]
+    mitigations:
+      - "Full namespace separation (no short names) to prevent collisions."
+      - "Conflict checking on load; audit logging with provenance."
+    sources:
+      - {ref: mcp-survey, section: "5.1.6"}
+
+  - id: MCP-T07
+    name: "Command Injection / Backdoor"
+    aliases: ["embedded backdoor", "dangerous sink"]
+    attacker: malicious_developer
+    lifecycle: code_implementation
+    phase_group: creation
+    severity: critical
+    summary: >-
+      Malicious logic is embedded in the server's source or dependencies so that
+      attacker-crafted prompts/parameters trigger arbitrary command execution.
+    static_detectability: "yes"
+    static_signals:
+      - "dangerous sinks: os.system, subprocess(..., shell=True), eval, exec"
+      - "child_process.exec / spawn with unsanitized input (JS/TS)"
+      - "tool input flowing into a shell without validation"
+    rules: ["CI-001"]
+    mitigations:
+      - "Code-integrity verification via reproducible builds + signing."
+      - "Strict dependency pinning; isolated build environments."
+      - "Runtime anomaly detection and audit logging."
+    sources:
+      - {ref: mcp-survey, section: "5.1.7"}
+
+  # --- Deployment phase: external attacker ---------------------------------
+  - id: MCP-T08
+    name: "Installer Spoofing"
+    aliases: ["malicious auto-installer"]
+    attacker: external_attacker
+    lifecycle: installer_deployment
+    phase_group: deployment
+    severity: high
+    summary: >-
+      Attackers distribute modified installers (via unofficial auto-installers)
+      that inject malicious code or backdoors during setup.
+    static_detectability: "no"
+    static_signals: []
+    rules: []   # known gap: deployment-time, not visible in server source
+    mitigations:
+      - "Standardized secure install showing source/version/signature + user confirm."
+      - "Reject unsigned or checksum-mismatched packages; reputation-based trust."
+    sources:
+      - {ref: mcp-survey, section: "5.2.1"}
+
+  - id: MCP-T09
+    name: "Indirect Prompt Injection"
+    aliases: ["second-order prompt injection"]
+    attacker: external_attacker
+    lifecycle: external_resource_access
+    phase_group: operation
+    severity: high
+    summary: >-
+      Malicious instructions are planted in external data (e.g. a crafted GitHub
+      issue) that the model later retrieves through an MCP tool and executes.
+    static_detectability: "partial"
+    static_signals:
+      - "tools that fetch external content and feed it back to the model unsanitized"
+    rules: ["TC-001"]   # weak static signal; primarily a runtime concern
+    mitigations:
+      - "Treat tool outputs as adversarial; sanitize untrusted content."
+      - "Validate/neutralize instructions hidden in retrieved data."
+    sources:
+      - {ref: mcp-survey, section: "5.2.2"}
+
+  # --- Operation phase: malicious user -------------------------------------
+  - id: MCP-T10
+    name: "Credential Theft"
+    aliases: ["token theft", "secret exposure"]
+    attacker: malicious_user
+    lifecycle: tool_invocation
+    phase_group: operation
+    severity: high
+    summary: >-
+      Plaintext API keys/tokens stored in predictable config locations (or
+      hardcoded in source) are exfiltrated and reused to impersonate the victim.
+    static_detectability: "yes"
+    static_signals:
+      - "plaintext API key / token / secret literals in source or config"
+      - "secrets in JSON config under default predictable paths"
+    rules: ["CR-001"]
+    mitigations:
+      - "Use secret managers / encrypted keystores, not plaintext config."
+      - "Restrictive filesystem permissions; automatic secret rotation."
+    sources:
+      - {ref: mcp-survey, section: "5.3.1"}
+
+  - id: MCP-T11
+    name: "Sandbox Escape"
+    aliases: ["isolation breakout", "over-privileged execution"]
+    attacker: malicious_user
+    lifecycle: tool_invocation
+    phase_group: operation
+    severity: high
+    summary: >-
+      MCP defines communication but no isolation; a poorly-confined or
+      over-privileged server lets tool execution break out to the host. Broad,
+      unconstrained capabilities are the precondition.
+    static_detectability: "partial"
+    static_signals:
+      - "capability far broader than the tool name implies"
+      - "schema accepts unconstrained path / command / URL"
+      - "binds to 0.0.0.0 / non-localhost with no auth; no directory boundary"
+    rules: ["OP-001", "OP-002", "OP-003"]
+    mitigations:
+      - "Bind only to trusted local clients with auth; scope filesystem to a dir."
+      - "Validate/sanitize inputs; container/process-level isolation."
+    sources:
+      - {ref: mcp-survey, section: "5.3.2"}
+
+  - id: MCP-T12
+    name: "Tool Chaining Abuse"
+    aliases: ["implicit toolchain", "parasitic toolchain"]
+    attacker: malicious_user
+    lifecycle: tool_invocation
+    phase_group: operation
+    severity: medium
+    summary: >-
+      Several individually low-risk tools are implicitly combined by the model
+      into a high-impact operation (list files -> read .env -> exfiltrate),
+      evading per-tool access controls.
+    static_detectability: "partial"
+    static_signals:
+      - "one server exposes a dangerous capability combination (local read + outbound network)"
+    rules: ["TC-001"]
+    mitigations:
+      - "Prohibit implicit chaining without explicit user approval."
+      - "Restrict which outputs can be piped to which tools (e.g. file -> network)."
+      - "Runtime anomaly detection on suspicious chains."
+    sources:
+      - {ref: mcp-survey, section: "5.3.3"}
+
+  - id: MCP-T13
+    name: "Unauthorized Access"
+    aliases: ["session hijacking", "confused deputy", "token passthrough"]
+    attacker: malicious_user
+    lifecycle: session_management
+    phase_group: operation
+    severity: high
+    summary: >-
+      Attackers reach servers/tools/channels beyond intended permissions via
+      leaked session ids, unprotected endpoints, or token passthrough without
+      audience validation.
+    static_detectability: "partial"
+    static_signals:
+      - "tools defined but no authentication/authorization signal detectable"
+    rules: ["ME-001"]
+    mitigations:
+      - "Mandatory endpoint auth on every connection; secure token storage."
+      - "Token audience enforcement; periodic session rotation/invalidation."
+    sources:
+      - {ref: mcp-survey, section: "5.3.4"}
+
+  # --- Maintenance phase: security flaws -----------------------------------
+  - id: MCP-T14
+    name: "Re-deployment of Vulnerable Versions"
+    aliases: ["stale version", "known-CVE reuse"]
+    attacker: security_flaw
+    lifecycle: version_control
+    phase_group: maintenance
+    severity: high
+    summary: >-
+      Continued use of a server with known vulnerabilities, often because
+      decentralized installers default to cached outdated versions.
+    static_detectability: "yes"
+    static_signals:
+      - "dependency manifest pins a version with a known CVE"
+    rules: []   # planned: DEP-001 dependency-CVE layer (roadmap phase 2)
+    mitigations:
+      - "Automated version checking + integrity auditing in registries."
+      - "CVE tracking and advisories; centralized secure discovery."
+    sources:
+      - {ref: mcp-survey, section: "5.4.1"}
+
+  - id: MCP-T15
+    name: "Post-Update Privilege Persistence"
+    aliases: ["stale credential", "revocation lag"]
+    attacker: security_flaw
+    lifecycle: version_control
+    phase_group: maintenance
+    severity: medium
+    summary: >-
+      Revoked or outdated credentials remain valid after an update because
+      privilege changes are not synchronized across running instances.
+    static_detectability: "no"
+    static_signals: []
+    rules: []   # known gap: runtime/lifecycle, not visible in static source
+    mitigations:
+      - "Immediate credential revocation during updates; synced privilege changes."
+      - "Spec parameters such as session_expiry / revocation_events."
+    sources:
+      - {ref: mcp-survey, section: "5.4.2"}
+
+  - id: MCP-T16
+    name: "Configuration Drift"
+    aliases: ["baseline drift", "misconfiguration"]
+    attacker: security_flaw
+    lifecycle: configuration_change
+    phase_group: maintenance
+    severity: medium
+    summary: >-
+      Uncoordinated configuration changes accumulate and deviate from the secure
+      baseline, exposing sensitive services.
+    static_detectability: "no"
+    static_signals: []
+    rules: []   # known gap: ops-time; diff mode can partially surface it
+    mitigations:
+      - "Automated validation against canonical templates; version-controlled config."
+      - "Immutable signed runtime manifests; rollback + continuous compliance audit."
+    sources:
+      - {ref: mcp-survey, section: "5.4.3"}

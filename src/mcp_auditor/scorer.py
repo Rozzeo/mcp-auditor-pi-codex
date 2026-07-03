@@ -22,5 +22,7 @@ def score_findings(findings: list[Finding]) -> int:
     """Return a 0-100 safety score (higher = safer)."""
     score = 100
     for finding in findings:
+        if finding.suppressed:
+            continue
         score -= SEVERITY_WEIGHTS.get(finding.severity, 0)
     return max(0, score)

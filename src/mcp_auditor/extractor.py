@@ -27,6 +27,10 @@ _PY_EXT = (".py",)
 _TS_EXT = (".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx")
 _JSON_EXT = (".json",)
 
+# How much text after a JS/TS tool registration to capture as the handler body
+# (scanned by code-level rules; never executed).
+_TS_BODY_WINDOW = 2000
+
 
 @dataclass
 class ExtractionResult:
@@ -90,12 +94,16 @@ def _extract_python(path: str, text: str) -> tuple[bool, list[Tool]]:
         name = _tool_name_from_decorator(node) or node.name
         description = ast.get_docstring(node) or ""
         schema = _schema_from_signature(node)
+        # Capture the function source as TEXT (never executed) so code-level
+        # rules like CI-001 can scan the body for dangerous sinks.
+        body = ast.get_source_segment(text, node) or ""
         tools.append(
             Tool(
                 name=name,
                 description=description.strip(),
                 schema=schema,
                 location=f"{path}:{node.lineno}",
+                body=body,
             )
         )
     # A file using a tool decorator implies the SDK even if the import is aliased.
@@ -180,7 +188,8 @@ def _extract_typescript(path: str, text: str) -> tuple[bool, list[Tool]]:
         name, desc = m.group(1), m.group(2)
         line = text.count("\n", 0, m.start()) + 1
         schema = _ts_schema_after(text, m.end())
-        tools.append(Tool(name=name, description=desc, schema=schema, location=f"{path}:{line}"))
+        body = text[m.start(): m.start() + _TS_BODY_WINDOW]
+        tools.append(Tool(name=name, description=desc, schema=schema, location=f"{path}:{line}", body=body))
 
     for m in _TS_REGISTER.finditer(text):
         name = m.group(1)
@@ -189,7 +198,8 @@ def _extract_typescript(path: str, text: str) -> tuple[bool, list[Tool]]:
         tail = text[m.end(): m.end() + 600]
         dm = re.search(r"""description\s*:\s*["'`]([^"'`]*)["'`]""", tail)
         desc = dm.group(1) if dm else ""
-        tools.append(Tool(name=name, description=desc, schema={}, location=f"{path}:{line}"))
+        body = text[m.start(): m.start() + _TS_BODY_WINDOW]
+        tools.append(Tool(name=name, description=desc, schema={}, location=f"{path}:{line}", body=body))
 
     if tools:
         sdk = True

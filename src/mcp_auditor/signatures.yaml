@@ -1,16 +1,24 @@
-# MCP Auditor signature set.
+# MCP Auditor signature set (the machine face of the Threat Atlas).
 #
 # This file is the editable detection knowledge base. Add a new pattern here to
 # extend a rule WITHOUT touching code. Patterns are case-insensitive Python
-# regular expressions unless noted. `version` is bumped whenever the set changes
-# so audits are reproducible against a known rule version (antivirus-style).
-version: 1
+# regular expressions unless noted. Every rule carries `threat:` (its MCP Threat
+# Atlas id, see threats.yaml) and `source:` provenance, so each finding is
+# traceable to the research/CVE that justifies it.
+#
+# `version` is bumped (in lockstep with threats.yaml) whenever the set changes so
+# audits are reproducible against a known rule version (antivirus-style).
+version: 3
+released: "2026-07-03"
 
 rules:
-  # --- Tool poisoning ------------------------------------------------------
+  # --- Tool poisoning (MCP-T04) --------------------------------------------
   TP-001:
+    confidence: medium
     category: tool_poisoning
     severity: critical
+    threat: MCP-T04
+    source: {ref: mcp-survey, section: "5.1.4"}
     message: "Instruction-like / imperative phrasing aimed at the agent found in tool metadata."
     recommendation: "Remove instruction-like text from tool descriptions. Descriptions should state what the tool does, not command the agent."
     patterns:
@@ -30,8 +38,11 @@ rules:
       - "</?(system|instructions?)>"
 
   TP-002:
+    confidence: high
     category: tool_poisoning
     severity: high
+    threat: MCP-T04
+    source: {ref: mcp-survey, section: "5.1.4"}
     message: "Hidden or non-printing characters found in tool metadata (can conceal instructions)."
     recommendation: "Strip zero-width, bidirectional-override, and control characters from all tool metadata."
     # Implemented in code via a unicode-category scan; this list documents the
@@ -46,8 +57,11 @@ rules:
       - "C0/C1 control characters (except tab/newline/carriage-return)"
 
   TP-003:
+    confidence: medium
     category: tool_poisoning
     severity: high
+    threat: MCP-T04
+    source: {ref: mcp-survey, section: "5.1.4"}
     message: "Tool description references secrets, environment variables, system internals, or other tools."
     recommendation: "Descriptions must not reference secrets, environment variables, file paths, system prompts, or other tools' internals."
     patterns:
@@ -63,8 +77,11 @@ rules:
       - "the (other|previous) tool"
 
   TP-004:
+    confidence: medium
     category: tool_poisoning
     severity: critical
+    threat: MCP-T04
+    source: {ref: mcp-survey, section: "5.1.4"}
     message: "Tool name does not match its described behavior (possible disguised capability)."
     recommendation: "Rename the tool to reflect what it actually does, or remove the unexpected behavior."
     # A tool whose NAME reads benign/read-only but whose DESCRIPTION performs
@@ -92,10 +109,160 @@ rules:
       - "upload(s|ing)?\\b"
       - "post(s|ing)? to (a |an )?(url|endpoint|server)"
 
-  # --- Over-privilege ------------------------------------------------------
+  # --- Preference manipulation / PMA (MCP-T03) -----------------------------
+  PM-001:
+    confidence: medium
+    category: preference_manipulation
+    severity: high
+    threat: MCP-T03
+    source: {ref: mcp-survey, section: "5.1.3"}
+    message: "Self-promoting / persuasive phrasing in tool metadata (biases the model's tool selection)."
+    recommendation: "Describe what the tool does, not why it should be chosen. Remove superlatives and directives that steer selection."
+    patterns:
+      - "prefer(s|red)? (to use |using )?this tool"
+      - "always (use|choose|select|prefer|pick) this"
+      - "best tool (for|to|available)"
+      - "most (reliable|accurate|powerful|capable|trusted|advanced) tool"
+      - "you should (use|choose|prefer|pick) this"
+      - "(use|choose|pick) this (tool )?(instead of|over|rather than)"
+      - "(highly )?recommended (tool )?(for|over|when)"
+      - "do not use (any )?other tools?"
+      - "this tool (is|should be) (the )?(default|preferred|prioriti[sz]ed|first choice)"
+      - "ideal (tool )?(for|when)"
+      - "superior to (other|all)"
+
+  # --- Name collision / shadowing (MCP-T02, MCP-T06) -----------------------
+  NC-001:
+    confidence: high
+    category: name_collision
+    severity: high
+    threat: MCP-T02
+    source: {ref: mcp-survey, section: "5.1.2"}
+    message: "Tool name collides with another tool or shadows a common sensitive tool name."
+    recommendation: "Namespace tools under a verified server id (e.g. gmail-mcp.send_email) and keep tool names unique."
+    # Duplicate detection is structural (done in code). This list names common
+    # sensitive tools that malicious servers like to shadow.
+    shadowed_names:
+      - "send_email"
+      - "send_message"
+      - "read_file"
+      - "write_file"
+      - "delete_file"
+      - "run_command"
+      - "execute"
+      - "exec"
+      - "search"
+      - "fetch"
+      - "create_issue"
+      - "transfer"
+      - "pay"
+
+  # --- Namespace typosquatting (MCP-T01) -----------------------------------
+  TS-001:
+    confidence: high
+    category: supply_chain
+    severity: high
+    threat: MCP-T01
+    source: {ref: mcp-survey, section: "5.1.1"}
+    message: "Server/tool name is a near-duplicate of a well-known MCP name (possible typosquat)."
+    recommendation: "Verify this is the authentic server. Squatted names (single-character or homoglyph variants) are a common supply-chain lure."
+    # Names within edit-distance `max_edit_distance` of a known popular name (but
+    # not equal) are flagged. Short names below min_len are ignored to cut noise.
+    min_len: 4
+    max_edit_distance: 1
+    known_names:
+      - "github"
+      - "gitlab"
+      - "slack"
+      - "filesystem"
+      - "postgres"
+      - "sqlite"
+      - "puppeteer"
+      - "playwright"
+      - "brave-search"
+      - "google-maps"
+      - "memory"
+      - "fetch"
+      - "sentry"
+      - "notion"
+      - "stripe"
+      - "sequentialthinking"
+
+  # --- Command injection / backdoor (MCP-T07) ------------------------------
+  CI-001:
+    confidence: medium
+    category: command_injection
+    severity: critical
+    threat: MCP-T07
+    source: {ref: mcp-survey, section: "5.1.7"}
+    message: "Dangerous execution sink in a tool implementation (enables command injection / backdoor)."
+    recommendation: "Avoid shell=True / eval / exec on tool inputs. Use argument lists and validate/whitelist inputs before any execution."
+    # Scanned against statically-captured tool BODIES (never executed).
+    sink_patterns:
+      - "os\\.system\\s*\\("
+      - "os\\.popen\\s*\\("
+      - "subprocess\\.(run|call|Popen|check_output|check_call)\\s*\\([^)]*shell\\s*=\\s*True"
+      - "\\beval\\s*\\("
+      - "\\bexec\\s*\\("
+      - "commands\\.(getoutput|getstatusoutput)\\s*\\("
+      - "pty\\.spawn\\s*\\("
+      - "child_process"
+      - "\\bexecSync\\s*\\("
+      - "\\bspawnSync\\s*\\("
+
+  # --- Credential exposure / theft (MCP-T10) -------------------------------
+  CR-001:
+    confidence: high
+    category: credential_exposure
+    severity: high
+    threat: MCP-T10
+    source: {ref: mcp-survey, section: "5.3.1"}
+    message: "Hardcoded credential or secret literal found in source/config (credential-theft exposure)."
+    recommendation: "Never embed secrets in code or config. Load them from a secret manager or environment at runtime and rotate exposed keys."
+    # Provider-specific key formats plus secret-looking assignments.
+    patterns:
+      - "sk-[A-Za-z0-9]{16,}"
+      - "gh[pousr]_[A-Za-z0-9]{16,}"
+      - "AKIA[0-9A-Z]{12,}"
+      - "AIza[0-9A-Za-z_\\-]{20,}"
+      - "xox[baprs]-[A-Za-z0-9-]{10,}"
+      - "(api[_-]?key|secret|token|password|passwd|access[_-]?key|client[_-]?secret)\\s*[:=]\\s*[\"'][A-Za-z0-9_\\-/+]{8,}[\"']"
+
+  # --- Rug pull / supply-chain mutability (MCP-T05) ------------------------
+  RP-001:
+    confidence: medium
+    category: supply_chain
+    severity: info
+    threat: MCP-T05
+    source: {ref: mcp-survey, section: "5.1.5"}
+    message: "Dependencies are not version-pinned and no lockfile was found (rug-pull / supply-chain mutability precondition)."
+    recommendation: "Pin exact dependency versions and commit a lockfile; verify server integrity (signatures/checksums) across updates. Re-audit after each release (diff mode)."
+    # Fires (file-level, info) when a dependency manifest uses floating version
+    # ranges and no lockfile is present. Temporal rug-pull detection is diff-mode
+    # (compare two audits over time) — tracked as future work.
+    manifest_files:
+      - "requirements.txt"
+      - "package.json"
+      - "pyproject.toml"
+    lockfiles:
+      - "package-lock.json"
+      - "poetry.lock"
+      - "pdm.lock"
+      - "yarn.lock"
+      - "uv.lock"
+      - "requirements.lock"
+    unpinned_patterns:
+      - "[\\^~]\\s*\\d"
+      - "[><]=?\\s*\\d"
+      - ":\\s*[\"']\\*[\"']"
+
+  # --- Over-privilege (MCP-T11) --------------------------------------------
   OP-001:
+    confidence: medium
     category: over_privilege
     severity: high
+    threat: MCP-T11
+    source: {ref: mcp-survey, section: "5.3.2"}
     message: "Described capability is broader than the tool name implies."
     recommendation: "Split the broad behavior into separate, clearly named tools, or narrow the implementation to match the name."
     read_name_hints:
@@ -120,8 +287,11 @@ rules:
       - "\\bupload(s)?\\b"
 
   OP-002:
+    confidence: medium
     category: over_privilege
     severity: medium
+    threat: MCP-T11
+    source: {ref: mcp-survey, section: "5.3.2"}
     message: "Tool schema accepts unconstrained dangerous input (path, command, or URL with no restriction)."
     recommendation: "Constrain the input with an enum, pattern, or format, or validate it before use."
     dangerous_param_names:
@@ -146,9 +316,54 @@ rules:
       - "format"
       - "const"
 
-  # --- Meta ----------------------------------------------------------------
+  OP-003:
+    confidence: medium
+    category: over_privilege
+    severity: medium
+    threat: MCP-T11
+    source: {ref: mcp-survey, section: "5.3.2"}
+    message: "Server binds to a non-localhost address with no authentication signal (sandbox-escape / exposure precondition)."
+    recommendation: "Bind to localhost, or require authentication for network-exposed servers. Scope filesystem access to a designated directory."
+    # Fires (file-level) when a broad network bind is present AND no auth signal
+    # was detected anywhere in the target.
+    bind_patterns:
+      - "0\\.0\\.0\\.0"
+      - "host\\s*=\\s*[\"']0\\.0\\.0\\.0[\"']"
+      - "host\\s*=\\s*[\"']\\*[\"']"
+      - "\\[::\\]"
+
+  # --- Tool chaining abuse (MCP-T12) ---------------------------------------
+  TC-001:
+    confidence: low
+    category: tool_chaining
+    severity: medium
+    threat: MCP-T12
+    source: {ref: mcp-survey, section: "5.3.3"}
+    message: "Server exposes a dangerous capability combination (local read + outbound network) enabling exfiltration chains."
+    recommendation: "Separate read and network capabilities across trust boundaries, or require explicit approval before chaining their outputs."
+    # Fires once (server-level) if at least one tool can read local data AND at
+    # least one tool can send data outbound.
+    local_read_patterns:
+      - "read(s|ing)? (the )?(file|files|directory|disk|contents)"
+      - "\\blist (files|directory|directories)"
+      - "\\.env\\b"
+      - "filesystem|file system"
+      - "load (the )?(file|config|credentials)"
+      - "\\bget(s)? (the )?(file|secret|credential|token)"
+    network_send_patterns:
+      - "send(s|ing)? (the )?(data|file|email|request|message|it)"
+      - "post(s|ing)? to (a |an )?(url|endpoint|server|webhook)"
+      - "upload(s|ing)?\\b"
+      - "http(s)?://|fetch\\(|requests\\.(get|post)|axios"
+      - "forward(s|ing)?\\b"
+      - "webhook|outbound|exfiltrat"
+
+  # --- Meta / unauthorized access (MCP-T13) --------------------------------
   ME-001:
+    confidence: high
     category: meta
     severity: info
+    threat: MCP-T13
+    source: {ref: mcp-survey, section: "5.3.4"}
     message: "Tool definitions found but no authentication signal detected (unauthenticated exposure is a known MCP risk)."
     recommendation: "Add authentication/authorization to the server if it is network-exposed."

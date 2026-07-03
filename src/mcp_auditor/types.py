@@ -12,7 +12,19 @@ from typing import Any, Optional
 # Ordered worst -> least severe. Used for sorting and for --fail-on comparisons.
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 
-CATEGORIES = ["tool_poisoning", "over_privilege", "meta"]
+# Original MVP categories plus the research-seeded categories added in v2. The
+# list is informational (additive); the scorer/reporter never depend on it.
+CATEGORIES = [
+    "tool_poisoning",
+    "over_privilege",
+    "meta",
+    "preference_manipulation",
+    "name_collision",
+    "supply_chain",
+    "command_injection",
+    "credential_exposure",
+    "tool_chaining",
+]
 
 
 @dataclass
@@ -26,14 +38,20 @@ class Tool:
     description: str
     schema: dict[str, Any] = field(default_factory=dict)
     location: str = ""
+    # Optional statically-captured function body text (never executed). Used by
+    # code-level rules such as CI-001. Empty for manifest/text extractions.
+    body: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "name": self.name,
             "description": self.description,
             "schema": self.schema,
             "location": self.location,
         }
+        if self.body:
+            out["body"] = self.body
+        return out
 
 
 @dataclass
@@ -48,9 +66,19 @@ class Finding:
     message: str
     evidence: str
     recommendation: str
+    # Provenance (added in v2): the Threat Atlas id this finding maps to and the
+    # research/CVE sources that justify it. Additive — omitted from to_dict when
+    # unset so the original documented shape is preserved for basic findings.
+    threat_id: Optional[str] = None
+    sources: list[dict[str, Any]] = field(default_factory=list)
+    confidence: Optional[str] = None
+    # False-positive handling (additive): a suppressed finding stays visible in
+    # the report with its justification but is excluded from score and summary.
+    suppressed: bool = False
+    suppress_reason: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "id": self.id,
             "category": self.category,
             "severity": self.severity,
@@ -60,6 +88,16 @@ class Finding:
             "evidence": self.evidence,
             "recommendation": self.recommendation,
         }
+        if self.threat_id is not None:
+            out["threat_id"] = self.threat_id
+        if self.sources:
+            out["sources"] = self.sources
+        if self.confidence is not None:
+            out["confidence"] = self.confidence
+        if self.suppressed:
+            out["suppressed"] = True
+            out["suppress_reason"] = self.suppress_reason
+        return out
 
 
 @dataclass
@@ -73,11 +111,14 @@ class AuditReport:
     findings: list[Finding]
     generated_at: str
     message: Optional[str] = None
+    # The signature-set version this audit ran against (added in v2), so audits
+    # are reproducible/pinnable like antivirus definitions. Omitted when unset.
+    signature_version: Optional[int] = None
 
     def summary(self) -> dict[str, int]:
         counts = {sev: 0 for sev in SEVERITY_ORDER}
         for finding in self.findings:
-            if finding.severity in counts:
+            if finding.severity in counts and not finding.suppressed:
                 counts[finding.severity] += 1
         return counts
 
@@ -93,4 +134,6 @@ class AuditReport:
         }
         if self.message is not None:
             out["message"] = self.message
+        if self.signature_version is not None:
+            out["signature_version"] = self.signature_version
         return out

@@ -7,6 +7,7 @@ edited without touching code. No LLM calls, no target execution.
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from pathlib import Path
@@ -41,11 +42,24 @@ def load_signatures(path: str | Path | None = None) -> dict[str, Any]:
     return data
 
 
-def run_rules(tools: list[Tool], signatures: dict[str, Any], has_auth_signal: bool) -> list[Finding]:
-    """Apply every rule to every tool and return all findings."""
+def run_rules(
+    tools: list[Tool],
+    signatures: dict[str, Any],
+    has_auth_signal: bool,
+    files: dict[str, str] | None = None,
+) -> list[Finding]:
+    """Apply every rule and return all findings.
+
+    Rules operate at three scopes: per-tool (metadata/body), server-level (across
+    the whole tool set), and file-level (raw source/config text). `files` is
+    optional so older callers and custom signature files keep working; new rules
+    are skipped when their key is absent from the signature set.
+    """
     rules = signatures["rules"]
+    files = files or {}
     findings: list[Finding] = []
 
+    # Per-tool rules (read only the extracted tool text/schema/body).
     for tool in tools:
         findings.extend(_tp001(tool, rules["TP-001"]))
         findings.extend(_tp002(tool, rules["TP-002"]))
@@ -53,10 +67,36 @@ def run_rules(tools: list[Tool], signatures: dict[str, Any], has_auth_signal: bo
         findings.extend(_tp004(tool, rules["TP-004"]))
         findings.extend(_op001(tool, rules["OP-001"]))
         findings.extend(_op002(tool, rules["OP-002"]))
+        if "PM-001" in rules:
+            findings.extend(_pm001(tool, rules["PM-001"]))
+        if "CI-001" in rules:
+            findings.extend(_ci001(tool, rules["CI-001"]))
+
+    # Server-level rules (need the whole tool set / a derived server name).
+    if "NC-001" in rules:
+        findings.extend(_nc001(tools, rules["NC-001"]))
+    if "TS-001" in rules:
+        findings.extend(_ts001(tools, files, rules["TS-001"]))
+    if "TC-001" in rules:
+        findings.extend(_tc001(tools, rules["TC-001"]))
+
+    # File-level rules (scan raw source/config text, never execute it).
+    if "CR-001" in rules:
+        findings.extend(_cr001(files, rules["CR-001"]))
+    if "OP-003" in rules:
+        findings.extend(_op003(files, has_auth_signal, rules["OP-003"]))
+    if "RP-001" in rules:
+        findings.extend(_rp001(files, rules["RP-001"]))
 
     # ME-001 is report-level: fires once if tools exist but no auth was detected.
     if tools and not has_auth_signal:
         findings.extend(_me001(rules["ME-001"]))
+
+    # Stamp each finding with its rule's confidence (signatures v3+). Pattern
+    # heuristics are honest about being "medium"; structural checks are "high".
+    for finding in findings:
+        if finding.confidence is None:
+            finding.confidence = rules.get(finding.id, {}).get("confidence")
 
     return findings
 
@@ -92,16 +132,24 @@ def _schema_text(schema: Any) -> str:
     return " ".join(parts)
 
 
-def _make(rule: dict[str, Any], rule_id: str, tool: Tool | None, evidence: str) -> Finding:
+def _make(
+    rule: dict[str, Any],
+    rule_id: str,
+    tool: Tool | None,
+    evidence: str,
+    location: str | None = None,
+) -> Finding:
+    loc = location if location is not None else (tool.location if tool else "")
     return Finding(
         id=rule_id,
         category=rule["category"],
         severity=rule["severity"],
         tool_name=tool.name if tool else None,
-        location=tool.location if tool else "",
+        location=loc,
         message=rule["message"],
         evidence=_redact(evidence),
         recommendation=rule["recommendation"],
+        threat_id=rule.get("threat"),
     )
 
 
@@ -190,3 +238,185 @@ def _op002(tool: Tool, rule: dict) -> list[Finding]:
 
 def _me001(rule: dict) -> list[Finding]:
     return [_make(rule, "ME-001", None, "no authentication signal detected")]
+
+
+# --- v2 rules: research-seeded (MCP Threat Atlas) --------------------------
+
+
+def _pm001(tool: Tool, rule: dict) -> list[Finding]:
+    """Preference Manipulation (MCP-T03): persuasive phrasing biasing selection."""
+    text = f"{tool.description} {_schema_text(tool.schema)}"
+    hit = _first_match(rule.get("patterns", []), text)
+    return [_make(rule, "PM-001", tool, hit)] if hit else []
+
+
+def _ci001(tool: Tool, rule: dict) -> list[Finding]:
+    """Command Injection / Backdoor (MCP-T07): dangerous sink in a tool body.
+
+    Scans the statically-captured function body text only — it is never executed.
+    """
+    body = getattr(tool, "body", "") or ""
+    if not body:
+        return []
+    hit = _first_match(rule.get("sink_patterns", []), body)
+    return [_make(rule, "CI-001", tool, f"dangerous sink: {hit}")] if hit else []
+
+
+def _nc001(tools: list[Tool], rule: dict) -> list[Finding]:
+    """Tool Name Conflict / Shadowing (MCP-T02/T06): duplicate tool names.
+
+    Within a single target the detectable signal is collision: two or more tools
+    sharing a name (the precondition for shadowing/interception).
+    """
+    by_name: dict[str, list[Tool]] = {}
+    for tool in tools:
+        by_name.setdefault(tool.name.lower(), []).append(tool)
+    findings: list[Finding] = []
+    for name, group in by_name.items():
+        if len(group) > 1:
+            note = " (shadows a common sensitive tool)" if name in {
+                n.lower() for n in rule.get("shadowed_names", [])
+            } else ""
+            findings.append(
+                _make(
+                    rule,
+                    "NC-001",
+                    group[0],
+                    f"tool name '{group[0].name}' defined {len(group)} times{note}",
+                )
+            )
+    return findings
+
+
+def _ts001(tools: list[Tool], files: dict[str, str], rule: dict) -> list[Finding]:
+    """Namespace Typosquatting (MCP-T01): names near-identical to a known one."""
+    known = [k.lower() for k in rule.get("known_names", [])]
+    min_len = int(rule.get("min_len", 4))
+    max_dist = int(rule.get("max_edit_distance", 1))
+
+    candidates: list[tuple[str, str]] = [(t.name, t.location) for t in tools]
+    pkg = _package_name(files)
+    if pkg:
+        candidates.append((pkg, "package manifest"))
+
+    findings: list[Finding] = []
+    seen: set[tuple[str, str]] = set()
+    for raw, loc in candidates:
+        name = _normalize_homoglyphs(raw.lower())
+        if len(name) < min_len or name in known:
+            continue
+        for k in known:
+            if abs(len(name) - len(k)) > max_dist:
+                continue
+            if name != k and _edit_distance(name, k) <= max_dist:
+                key = (name, k)
+                if key in seen:
+                    break
+                seen.add(key)
+                findings.append(
+                    _make(rule, "TS-001", None, f"'{raw}' resembles known name '{k}'", location=loc)
+                )
+                break
+    return findings
+
+
+def _tc001(tools: list[Tool], rule: dict) -> list[Finding]:
+    """Tool Chaining Abuse (MCP-T12): a server with read + outbound-send tools."""
+    read_pats = rule.get("local_read_patterns", [])
+    send_pats = rule.get("network_send_patterns", [])
+    reader = sender = None
+    for tool in tools:
+        text = f"{tool.name} {tool.description} {_schema_text(tool.schema)} {getattr(tool, 'body', '') or ''}"
+        if reader is None and _first_match(read_pats, text):
+            reader = tool
+        if sender is None and _first_match(send_pats, text):
+            sender = tool
+    if reader and sender:
+        ev = f"read-capable tool '{reader.name}' + network-capable tool '{sender.name}'"
+        return [_make(rule, "TC-001", None, ev)]
+    return []
+
+
+def _cr001(files: dict[str, str], rule: dict) -> list[Finding]:
+    """Credential Theft (MCP-T10): hardcoded secret literals in source/config."""
+    patterns = rule.get("patterns", [])
+    findings: list[Finding] = []
+    for path, text in files.items():
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            hit = _first_match(patterns, line)
+            if hit:
+                findings.append(_make(rule, "CR-001", None, hit, location=f"{path}:{lineno}"))
+                break  # one finding per file is enough to flag the file
+    return findings
+
+
+def _op003(files: dict[str, str], has_auth_signal: bool, rule: dict) -> list[Finding]:
+    """Sandbox-escape precondition (MCP-T11): broad network bind, no auth."""
+    if has_auth_signal:
+        return []
+    patterns = rule.get("bind_patterns", [])
+    for path, text in files.items():
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            hit = _first_match(patterns, line)
+            if hit:
+                return [_make(rule, "OP-003", None, f"binds to {hit}", location=f"{path}:{lineno}")]
+    return []
+
+
+def _rp001(files: dict[str, str], rule: dict) -> list[Finding]:
+    """Rug-pull precondition (MCP-T05): floating deps and no lockfile."""
+    manifests = [m.lower() for m in rule.get("manifest_files", [])]
+    lockfiles = [l.lower() for l in rule.get("lockfiles", [])]
+    present = [(p, t) for p, t in files.items() if any(p.lower().endswith(m) for m in manifests)]
+    if not present:
+        return []
+    has_lock = any(any(p.lower().endswith(l) for l in lockfiles) for p in files)
+    if has_lock:
+        return []
+    for path, text in present:
+        if _first_match(rule.get("unpinned_patterns", []), text):
+            return [_make(rule, "RP-001", None, "unpinned dependency versions, no lockfile", location=path)]
+    return []
+
+
+# --- helpers for the v2 rules ----------------------------------------------
+
+# Common homoglyph substitutions used in squatting (digit/letter lookalikes).
+_HOMOGLYPHS = str.maketrans({"0": "o", "1": "l", "3": "e", "5": "s", "_": "-"})
+
+
+def _normalize_homoglyphs(name: str) -> str:
+    return name.translate(_HOMOGLYPHS)
+
+
+def _edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance (small strings; iterative two-row DP)."""
+    if a == b:
+        return 0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        curr = [i]
+        for j, cb in enumerate(b, start=1):
+            cost = 0 if ca == cb else 1
+            curr.append(min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost))
+        prev = curr
+    return prev[-1]
+
+
+def _package_name(files: dict[str, str]) -> str | None:
+    """Best-effort static read of a package/server name from manifest files."""
+    for path, text in files.items():
+        low = path.lower()
+        if low.endswith("package.json"):
+            try:
+                data = json.loads(text)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            name = data.get("name") if isinstance(data, dict) else None
+            if isinstance(name, str) and name:
+                return name.split("/")[-1]
+        elif low.endswith("pyproject.toml"):
+            m = re.search(r'(?m)^\s*name\s*=\s*["\']([^"\']+)["\']', text)
+            if m:
+                return m.group(1)
+    return None

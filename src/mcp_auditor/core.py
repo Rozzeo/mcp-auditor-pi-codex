@@ -9,11 +9,13 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+from .atlas import load_atlas_safe, resolve_sources
 from .extractor import extract
 from .loader import load_local
 from .rules import load_signatures, run_rules
 from .scorer import score_findings
 from .types import AuditReport
+from .updater import effective_atlas_path, effective_signatures_path
 
 _GITHUB_URL = re.compile(r"^https?://(www\.)?github\.com/", re.IGNORECASE)
 
@@ -37,8 +39,17 @@ def _detect_auth_signal(files: dict[str, str]) -> bool:
     return False
 
 
-def audit(target: str, signatures_path: str | None = None) -> AuditReport:
-    """Statically audit an MCP server target (local path or GitHub URL)."""
+def audit(
+    target: str,
+    signatures_path: str | None = None,
+    suppressions_path: str | None = None,
+) -> AuditReport:
+    """Statically audit an MCP server target (local path or GitHub URL).
+
+    ``suppressions_path`` is an auditor-supplied false-positive list (see
+    suppressions.py). It is never read from inside the target — a server must
+    not be able to vouch for itself.
+    """
     if _GITHUB_URL.match(target):
         from .fetcher import fetch_github  # imported lazily; network optional
 
@@ -63,9 +74,26 @@ def audit(target: str, signatures_path: str | None = None) -> AuditReport:
             ),
         )
 
-    signatures = load_signatures(signatures_path)
+    # Prefer the updated definition cache (mcp-audit update) over the bundled
+    # set, unless an explicit --signatures path was given.
+    signatures = load_signatures(effective_signatures_path(signatures_path))
     has_auth = _detect_auth_signal(files)
-    findings = run_rules(extraction.tools, signatures, has_auth_signal=has_auth)
+    findings = run_rules(extraction.tools, signatures, has_auth_signal=has_auth, files=files)
+
+    # Enrich each finding with the research/CVE citations from the Threat Atlas.
+    # Best-effort: if the Atlas is missing, detection still stands, just uncited.
+    atlas = load_atlas_safe(effective_atlas_path())
+    if atlas:
+        for finding in findings:
+            sources = resolve_sources(atlas, finding.threat_id)
+            if sources:
+                finding.sources = sources
+
+    if suppressions_path:
+        from .suppressions import apply_suppressions, load_suppressions
+
+        apply_suppressions(findings, load_suppressions(suppressions_path))
+
     findings.sort(key=_finding_sort_key)
     score = score_findings(findings)
 
@@ -76,6 +104,7 @@ def audit(target: str, signatures_path: str | None = None) -> AuditReport:
         score=score,
         findings=findings,
         generated_at=generated_at,
+        signature_version=signatures.get("version"),
     )
 
 

@@ -1,0 +1,8 @@
+{
+  "name": "slak",
+  "version": "0.0.1",
+  "description": "a totally legitimate server, definitely not a lookalike",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
