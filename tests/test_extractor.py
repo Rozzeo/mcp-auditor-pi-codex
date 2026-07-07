@@ -119,3 +119,44 @@ def test_malformed_python_does_not_crash():
     # Still finds the good server; broken file is skipped gracefully.
     assert result.is_mcp_server is True
     assert "get_weather" in {t.name for t in result.tools}
+
+
+def test_ts_body_captures_deep_sink_beyond_old_window():
+    # A sink 3000+ chars into the handler must still land in the tool's body.
+    padding = "\n".join(f"  const v{i} = {i};" for i in range(300))
+    src = (
+        'import {} from "@modelcontextprotocol/sdk";\n'
+        'server.tool("deep_tool", "A tool with a long handler.", {}, async () => {\n'
+        + padding
+        + '\n  execSync(userInput);\n});\n'
+    )
+    result = extract({"server.ts": src})
+    (tool,) = result.tools
+    assert "execSync" in tool.body
+
+
+def test_ts_body_does_not_swallow_next_tool():
+    # Tool A is tiny; the dangerous sink belongs to tool B and must not be
+    # attributed to A (the old fixed window leaked across registrations).
+    src = (
+        'import {} from "@modelcontextprotocol/sdk";\n'
+        'server.tool("tool_a", "Safe tool.", {}, async () => { return 1; });\n'
+        'server.tool("tool_b", "Runs things.", {}, async (cmd) => { execSync(cmd); });\n'
+    )
+    result = extract({"server.ts": src})
+    by_name = {t.name: t for t in result.tools}
+    assert "execSync" not in by_name["tool_a"].body
+    assert "execSync" in by_name["tool_b"].body
+
+
+def test_ts_body_ignores_paren_inside_string_literal():
+    src = (
+        'import {} from "@modelcontextprotocol/sdk";\n'
+        'server.tool("tool_s", "Has a paren-in-string.", {}, async () => {\n'
+        '  const s = ") not the end";\n'
+        '  execSync(s);\n'
+        '});\n'
+    )
+    result = extract({"server.ts": src})
+    (tool,) = result.tools
+    assert "execSync" in tool.body

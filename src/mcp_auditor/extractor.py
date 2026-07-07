@@ -27,9 +27,11 @@ _PY_EXT = (".py",)
 _TS_EXT = (".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx")
 _JSON_EXT = (".json",)
 
-# How much text after a JS/TS tool registration to capture as the handler body
-# (scanned by code-level rules; never executed).
-_TS_BODY_WINDOW = 2000
+# Safety cap on how much text one JS/TS tool registration can capture as its
+# body (scanned by code-level rules; never executed). The body itself is cut at
+# the registration call's balanced closing paren, so one tool's body never
+# swallows the next tool's code.
+_TS_BODY_CAP = 20000
 
 
 @dataclass
@@ -188,7 +190,7 @@ def _extract_typescript(path: str, text: str) -> tuple[bool, list[Tool]]:
         name, desc = m.group(1), m.group(2)
         line = text.count("\n", 0, m.start()) + 1
         schema = _ts_schema_after(text, m.end())
-        body = text[m.start(): m.start() + _TS_BODY_WINDOW]
+        body = _ts_call_span(text, m.start())
         tools.append(Tool(name=name, description=desc, schema=schema, location=f"{path}:{line}", body=body))
 
     for m in _TS_REGISTER.finditer(text):
@@ -198,12 +200,43 @@ def _extract_typescript(path: str, text: str) -> tuple[bool, list[Tool]]:
         tail = text[m.end(): m.end() + 600]
         dm = re.search(r"""description\s*:\s*["'`]([^"'`]*)["'`]""", tail)
         desc = dm.group(1) if dm else ""
-        body = text[m.start(): m.start() + _TS_BODY_WINDOW]
+        body = _ts_call_span(text, m.start())
         tools.append(Tool(name=name, description=desc, schema={}, location=f"{path}:{line}", body=body))
 
     if tools:
         sdk = True
     return sdk, tools
+
+
+def _ts_call_span(text: str, start: int) -> str:
+    """Capture one tool-registration call as text, ending at its balanced `)`.
+
+    String-aware paren matching so a `)` inside a quoted/template literal does
+    not close the call early. Falls back to a capped slice if the call never
+    closes (malformed source).
+    """
+    open_idx = text.find("(", start)
+    if open_idx == -1:
+        return text[start: start + _TS_BODY_CAP]
+    depth = 0
+    quote: str | None = None
+    prev = ""
+    end_limit = min(len(text), start + _TS_BODY_CAP)
+    for i in range(open_idx, end_limit):
+        ch = text[i]
+        if quote:
+            if ch == quote and prev != "\\":
+                quote = None
+        elif ch in "\"'`":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start: i + 1]
+        prev = ch
+    return text[start:end_limit]
 
 
 def _ts_schema_after(text: str, pos: int) -> dict:

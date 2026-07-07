@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -71,6 +72,16 @@ def run_rules(
             findings.extend(_pm001(tool, rules["PM-001"]))
         if "CI-001" in rules:
             findings.extend(_ci001(tool, rules["CI-001"]))
+        if "SQ-001" in rules:
+            findings.extend(_sq001(tool, rules["SQ-001"]))
+        if "DB-001" in rules:
+            findings.extend(_db001(tool, rules["DB-001"]))
+        if "DB-002" in rules:
+            findings.extend(_db002(tool, rules["DB-002"]))
+        if "DE-001" in rules:
+            findings.extend(_de001(tool, rules["DE-001"]))
+        if "DL-001" in rules:
+            findings.extend(_dl001(tool, rules["DL-001"]))
 
     # Server-level rules (need the whole tool set / a derived server name).
     if "NC-001" in rules:
@@ -159,6 +170,18 @@ def _first_match(patterns: Iterable[str], text: str) -> str | None:
         if m:
             return m.group(0)
     return None
+
+
+@lru_cache(maxsize=64)
+def _combined(patterns: tuple[str, ...]) -> re.Pattern:
+    """One precompiled alternation for file-level rules — those scan every byte
+    of the target, so per-line/per-pattern re.search calls dominate audit time
+    on large repos."""
+    return re.compile("|".join(f"(?:{p})" for p in patterns), re.IGNORECASE)
+
+
+def _line_of(text: str, pos: int) -> int:
+    return text.count("\n", 0, pos) + 1
 
 
 def _name_tokens(name: str) -> list[str]:
@@ -339,14 +362,17 @@ def _tc001(tools: list[Tool], rule: dict) -> list[Finding]:
 
 def _cr001(files: dict[str, str], rule: dict) -> list[Finding]:
     """Credential Theft (MCP-T10): hardcoded secret literals in source/config."""
-    patterns = rule.get("patterns", [])
+    patterns = tuple(rule.get("patterns", []))
+    if not patterns:
+        return []
+    regex = _combined(patterns)
     findings: list[Finding] = []
     for path, text in files.items():
-        for lineno, line in enumerate(text.splitlines(), start=1):
-            hit = _first_match(patterns, line)
-            if hit:
-                findings.append(_make(rule, "CR-001", None, hit, location=f"{path}:{lineno}"))
-                break  # one finding per file is enough to flag the file
+        m = regex.search(text)  # one finding per file is enough to flag the file
+        if m:
+            findings.append(
+                _make(rule, "CR-001", None, m.group(0), location=f"{path}:{_line_of(text, m.start())}")
+            )
     return findings
 
 
@@ -354,12 +380,16 @@ def _op003(files: dict[str, str], has_auth_signal: bool, rule: dict) -> list[Fin
     """Sandbox-escape precondition (MCP-T11): broad network bind, no auth."""
     if has_auth_signal:
         return []
-    patterns = rule.get("bind_patterns", [])
+    patterns = tuple(rule.get("bind_patterns", []))
+    if not patterns:
+        return []
+    regex = _combined(patterns)
     for path, text in files.items():
-        for lineno, line in enumerate(text.splitlines(), start=1):
-            hit = _first_match(patterns, line)
-            if hit:
-                return [_make(rule, "OP-003", None, f"binds to {hit}", location=f"{path}:{lineno}")]
+        m = regex.search(text)
+        if m:
+            return [
+                _make(rule, "OP-003", None, f"binds to {m.group(0)}", location=f"{path}:{_line_of(text, m.start())}")
+            ]
     return []
 
 
@@ -377,6 +407,77 @@ def _rp001(files: dict[str, str], rule: dict) -> list[Finding]:
         if _first_match(rule.get("unpinned_patterns", []), text):
             return [_make(rule, "RP-001", None, "unpinned dependency versions, no lockfile", location=path)]
     return []
+
+
+# --- v3 rules: database & data-leak security (spec goal: vet MCPs that touch
+# --- databases so corporate data cannot leak through an agent) ---------------
+
+
+def _sq001(tool: Tool, rule: dict) -> list[Finding]:
+    """SQL Injection sink (MCP-T07): SQL built by interpolation in a tool body."""
+    body = getattr(tool, "body", "") or ""
+    if not body:
+        return []
+    hit = _first_match(rule.get("sql_interp_patterns", []), body)
+    return [_make(rule, "SQ-001", tool, f"interpolated SQL: {hit}")] if hit else []
+
+
+def _db001(tool: Tool, rule: dict) -> list[Finding]:
+    """Raw SQL passthrough (MCP-T11): caller-supplied SQL reaches an exec call.
+
+    Fires when (a) a raw-SQL-named parameter exists AND the body shows an
+    execution signal, or (b) the description itself advertises arbitrary SQL.
+    """
+    desc_hit = _first_match(rule.get("description_patterns", []), tool.description)
+    if desc_hit:
+        return [_make(rule, "DB-001", tool, f"description: {desc_hit}")]
+
+    schema = tool.schema if isinstance(tool.schema, dict) else {}
+    props = schema.get("properties")
+    props = props if isinstance(props, dict) else {}
+    raw_params = set(rule.get("raw_sql_param_names", []))
+    param = next((p for p in props if p.lower() in raw_params), None)
+    if not param:
+        return []
+    body = getattr(tool, "body", "") or ""
+    exec_hit = _first_match(rule.get("exec_signal_patterns", []), body)
+    if not exec_hit:
+        return []
+    return [_make(rule, "DB-001", tool, f"raw-SQL parameter '{param}' reaches {exec_hit.strip()}")]
+
+
+def _db002(tool: Tool, rule: dict) -> list[Finding]:
+    """Destructive/admin SQL (MCP-T11): DDL/DCL capability in body or metadata."""
+    text = f"{tool.description} {_schema_text(tool.schema)} {getattr(tool, 'body', '') or ''}"
+    hit = _first_match(rule.get("patterns", []), text)
+    return [_make(rule, "DB-002", tool, f"destructive SQL: {hit}")] if hit else []
+
+
+def _de001(tool: Tool, rule: dict) -> list[Finding]:
+    """Exfiltration sink (MCP-T12): data sent to a hardcoded external endpoint."""
+    body = getattr(tool, "body", "") or ""
+    if not body:
+        return []
+    known = _first_match(rule.get("exfil_host_patterns", []), body)
+    if known:
+        return [_make(rule, "DE-001", tool, f"known callback/exfil host: {known}")]
+    url_pat = rule.get("url_pattern")
+    if not url_pat:
+        return []
+    url = re.search(url_pat, body, re.IGNORECASE)
+    if not url:
+        return []
+    send = _first_match(rule.get("send_patterns", []), body)
+    if not send:
+        return []
+    return [_make(rule, "DE-001", tool, f"hardcoded endpoint {url.group(0)} + send call {send.strip()}")]
+
+
+def _dl001(tool: Tool, rule: dict) -> list[Finding]:
+    """Sensitive-data surface (MCP-T13): PII/credential tables and columns."""
+    text = f"{tool.description} {_schema_text(tool.schema)} {getattr(tool, 'body', '') or ''}"
+    hit = _first_match(rule.get("patterns", []), text)
+    return [_make(rule, "DL-001", tool, f"sensitive data reference: {hit}")] if hit else []
 
 
 # --- helpers for the v2 rules ----------------------------------------------

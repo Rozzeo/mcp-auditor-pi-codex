@@ -24,6 +24,8 @@ CATEGORIES = [
     "command_injection",
     "credential_exposure",
     "tool_chaining",
+    "data_exfiltration",
+    "data_leakage",
 ]
 
 
@@ -114,6 +116,10 @@ class AuditReport:
     # The signature-set version this audit ran against (added in v2), so audits
     # are reproducible/pinnable like antivirus definitions. Omitted when unset.
     signature_version: Optional[int] = None
+    # The extracted tool surface (added in v3, additive) so a saved --json
+    # report works as a full diff baseline (rug-pull detection). Serialized
+    # slim — name/description/schema/location, never the captured body text.
+    tools: Optional[list[Tool]] = None
 
     def summary(self) -> dict[str, int]:
         counts = {sev: 0 for sev in SEVERITY_ORDER}
@@ -136,4 +142,14 @@ class AuditReport:
             out["message"] = self.message
         if self.signature_version is not None:
             out["signature_version"] = self.signature_version
+        if self.tools is not None:
+            out["tools"] = [
+                {
+                    "name": t.name,
+                    "description": t.description,
+                    "schema": t.schema,
+                    "location": t.location,
+                }
+                for t in self.tools
+            ]
         return out

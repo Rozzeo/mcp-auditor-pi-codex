@@ -74,6 +74,42 @@ def audit_mcp_server(
 
 
 @mcp.tool()
+def diff_mcp_server_versions(
+    old_target: str,
+    new_target: str,
+    signatures_path: Optional[str] = None,
+    suppressions_path: Optional[str] = None,
+) -> dict[str, Any]:
+    """Compare two audits of the same MCP server (the rug-pull detector).
+
+    Audit both sides statically and report what changed between versions. A
+    side may also be a previously saved audit JSON file (a baseline).
+
+    Args:
+        old_target: The older version — local directory, GitHub URL, or a saved
+            audit-report JSON file. Never executed.
+        new_target: The newer version, same accepted forms.
+        signatures_path: Optional pinned signatures.yaml applied to both sides.
+        suppressions_path: Optional auditor-side suppression file, both sides.
+
+    Returns:
+        Score delta, new_findings (each with severity and recommendation),
+        resolved_findings, the tool-surface change list (added / removed /
+        changed tools), and rug_pull_signal — true when the tool surface
+        changed between versions (MCP-T05), which warrants re-review before
+        trusting the update.
+    """
+    from .diffmode import diff_audits
+
+    return diff_audits(
+        old_target,
+        new_target,
+        signatures_path=signatures_path,
+        suppressions_path=suppressions_path,
+    )
+
+
+@mcp.tool()
 def list_rules(signatures_path: Optional[str] = None) -> dict[str, Any]:
     """List the detection rules in the active signature set.
 

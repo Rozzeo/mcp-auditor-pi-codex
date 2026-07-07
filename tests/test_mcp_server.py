@@ -24,7 +24,13 @@ SERVER_PARAMS = StdioServerParameters(
     env={"PYTHONPATH": str(REPO_ROOT / "src")},
 )
 
-EXPECTED_TOOLS = {"audit_mcp_server", "list_rules", "explain_threat", "list_threats"}
+EXPECTED_TOOLS = {
+    "audit_mcp_server",
+    "diff_mcp_server_versions",
+    "list_rules",
+    "explain_threat",
+    "list_threats",
+}
 
 
 def _call(tool_name: str, arguments: dict) -> dict:

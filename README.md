@@ -46,6 +46,9 @@ mcp-audit ./server.py                 # audit a single file
 mcp-audit https://github.com/owner/repo
 mcp-audit ./my-server --json          # machine-readable AuditReport on stdout
 mcp-audit ./my-server --fail-on high  # exit non-zero if any high+ finding exists (CI gate)
+mcp-audit ./my-server --html report.html   # also write a shareable HTML dashboard
+mcp-audit playground                  # generate the interactive MCP Security Playground
+mcp-audit diff ./server-v1 ./server-v2     # what changed between two versions (rug pulls)
 ```
 
 - **Default (human):** colored terminal output — score, per-severity counts, and
@@ -56,6 +59,47 @@ mcp-audit ./my-server --fail-on high  # exit non-zero if any high+ finding exist
   severity exists. Severities: `critical`, `high`, `medium`, `low`, `info`.
 
 For GitHub URLs, set `GITHUB_TOKEN` to raise the API rate limit (optional).
+
+## Visual reports & playground
+
+Two presentation surfaces over the same pure `audit()` core — made for showing
+non-CLI people (reviewers, coworkers installing MCPs) what the auditor found:
+
+- **`--html report.html`** — writes a self-contained HTML dashboard: score
+  meter, per-severity tiles, findings-by-category bars, and one card per finding
+  with evidence, threat id, citation, and fix. No external assets; attach it to
+  a ticket or open from CI artifacts. Suppressed findings stay visible,
+  struck-through with their justification.
+- **`mcp-audit playground [--out mcp-playground.html]`** — generates the
+  interactive **MCP Security Playground**: paste a tool's name / description /
+  schema / body and watch the per-tool rules and score update live, entirely in
+  the browser. Presets include a clean tool, a poisoned one, a SQL-injection
+  lookup, a raw-SQL runner, and a silent exfiltrator. Patterns are embedded
+  verbatim from the shipped `signatures.yaml`, so the page always matches the
+  signature version; server-level rules still require a real CLI audit. A
+  **"What to fix first"** panel turns the findings into a prioritized,
+  deduplicated remediation checklist.
+
+## Diff mode — the rug-pull detector
+
+A server that was clean at install time can turn malicious in an update
+(MCP-T05). `diff` compares two audits of the same server:
+
+```bash
+mcp-audit diff ./server-v1 ./server-v2          # two source trees
+mcp-audit diff baseline.json ./server           # saved --json report vs live target
+mcp-audit diff old new --json                   # structured diff on stdout
+mcp-audit diff old new --fail-on high           # CI gate: fail if a NEW high+ finding appeared
+```
+
+It reports the score delta, **new findings** (with fixes), **resolved
+findings**, and the tool-surface change list — an added tool or a changed
+description/schema on an existing tool raises an explicit **rug-pull signal**.
+Suppressed findings are excluded from the comparison. Typical workflow: save
+`mcp-audit ./server --json > baseline.json` at approval time, then re-run
+`mcp-audit diff baseline.json ./server` after every update — the saved report
+carries the tool surface (names, descriptions, schemas; never captured source
+bodies), so the full rug-pull comparison works from a JSON baseline alone.
 
 ## MCP plugin — the tool that audits the tools
 
@@ -73,6 +117,7 @@ Tools exposed:
 | Tool | Purpose |
 |------|---------|
 | `audit_mcp_server` | Audit a local path or GitHub URL; returns the full `AuditReport` |
+| `diff_mcp_server_versions` | Compare two versions (or a JSON baseline vs live) — the rug-pull detector |
 | `list_rules` | Active signature set: rule ids, severities, messages |
 | `list_threats` | Summary of every threat class in the MCP Threat Atlas |
 | `explain_threat` | Full atlas record for one threat id, with cited sources |
@@ -133,7 +178,25 @@ attack). Three layers keep that honest without touching the deterministic core:
 | TP-004 | critical | tool poisoning | Tool name that doesn't match its described behavior (disguised capability) |
 | OP-001 | high | over-privilege | Capability broader than the name implies (read-named tool that writes/sends/deletes) |
 | OP-002 | medium | over-privilege | Schema accepting unconstrained dangerous input (raw path / command / URL) |
+| OP-003 | medium | over-privilege | Non-localhost network bind with no authentication signal |
+| PM-001 | high | preference manipulation | Self-promoting phrasing that biases the model's tool selection |
+| NC-001 | high | name collision | Duplicate tool names / shadowing of a common sensitive tool |
+| TS-001 | high | supply chain | Server/tool name typosquatting a well-known MCP name |
+| RP-001 | info | supply chain | Unpinned dependencies with no lockfile (rug-pull precondition) |
+| CI-001 | critical | command injection | Dangerous execution sink (`os.system`, `eval`, `shell=True`, …) in a tool body |
+| CR-001 | high | credential exposure | Hardcoded secret literals in source/config |
+| TC-001 | medium | tool chaining | Local-read + outbound-send capability combination (exfiltration chain) |
+| SQ-001 | critical | command injection | SQL built by f-string / concat / `%` / `.format()` / template literal (SQL injection) |
+| DB-001 | high | over-privilege | Caller-supplied raw SQL reaching an execute call (arbitrary DB access) |
+| DB-002 | high | over-privilege | Destructive/admin SQL capability (`DROP`, `TRUNCATE`, `GRANT`, `ALTER`) |
+| DE-001 | critical | data exfiltration | Data sent to a hardcoded external endpoint or known callback host |
+| DL-001 | medium | data leakage | Sensitive PII/credential tables and columns (`SELECT * FROM users`, SSN, card numbers) |
 | ME-001 | info | meta | Tools defined but no authentication signal detected |
+
+The `SQ/DB/DE/DL` block exists for the headline corporate risk: employees
+installing MCP servers that talk to internal databases. It answers, statically,
+"can this server leak our data?" — injection sinks, arbitrary-SQL passthrough,
+destructive capability, hardcoded exfiltration endpoints, and PII exposure.
 
 ## Scoring formula
 

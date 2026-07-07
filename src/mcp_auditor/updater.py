@@ -18,7 +18,7 @@ import yaml
 
 # Override with the MCP_AUDIT_DEFS_URL env var (e.g. to point at a fork/release).
 DEFAULT_BASE_URL = (
-    "https://raw.githubusercontent.com/Roza/mcp-auditor/main/src/mcp_auditor"
+    "https://raw.githubusercontent.com/Rozzeo/mcp-auditor/main/src/mcp_auditor"
 )
 DEFINITION_FILES = ("signatures.yaml", "threats.yaml")
 _TIMEOUT = 20
@@ -41,20 +41,42 @@ def cached_atlas_path() -> Optional[Path]:
     return _cached("threats.yaml")
 
 
+def _bundled(name: str) -> Path:
+    return Path(__file__).with_name(name)
+
+
+def _newer_than_bundled(cached: Optional[Path], name: str) -> Optional[Path]:
+    """Use the cache only when it is at least as new as the bundled file.
+
+    A pip upgrade can ship fresher definitions than an old `mcp-audit update`
+    cache; without this check the stale cache would silently win forever.
+    """
+    if cached is None:
+        return None
+    cached_v = _read_version(cached)
+    bundled_v = _read_version(_bundled(name))
+    if cached_v is None:
+        return None
+    if bundled_v is not None and cached_v < bundled_v:
+        return None
+    return cached
+
+
 def effective_signatures_path(explicit: str | Path | None) -> Optional[str]:
     """Resolve which signatures file an audit should use.
 
-    Order: an explicit ``--signatures`` path > the updated cache > None (the
-    bundled default handled by the loader).
+    Order: an explicit ``--signatures`` path > the updated cache (only if its
+    version is >= the bundled one) > None (the bundled default handled by the
+    loader).
     """
     if explicit:
         return str(explicit)
-    cached = cached_signatures_path()
+    cached = _newer_than_bundled(cached_signatures_path(), "signatures.yaml")
     return str(cached) if cached else None
 
 
 def effective_atlas_path() -> Optional[str]:
-    cached = cached_atlas_path()
+    cached = _newer_than_bundled(cached_atlas_path(), "threats.yaml")
     return str(cached) if cached else None
 
 
@@ -67,13 +89,23 @@ def update(base_url: str | None = None, session=None, dest: str | Path | None = 
 
         session = requests.Session()
 
-    target.mkdir(parents=True, exist_ok=True)
-    written: dict[str, int] = {}
+    # Download and VALIDATE everything first; only then write. A truncated or
+    # malformed download must never replace a working definition set.
+    _REQUIRED_KEY = {"signatures.yaml": "rules", "threats.yaml": "threats"}
+    fetched: dict[str, str] = {}
     for name in DEFINITION_FILES:
         resp = session.get(f"{base}/{name}", headers={"User-Agent": "mcp-auditor"}, timeout=_TIMEOUT)
         resp.raise_for_status()
-        (target / name).write_text(resp.text, encoding="utf-8")
-        written[name] = len(resp.text)
+        data = yaml.safe_load(resp.text)
+        if not isinstance(data, dict) or _REQUIRED_KEY[name] not in data:
+            raise ValueError(f"Downloaded {name} is not a valid definition file; keeping the current set.")
+        fetched[name] = resp.text
+
+    target.mkdir(parents=True, exist_ok=True)
+    written: dict[str, int] = {}
+    for name, text in fetched.items():
+        (target / name).write_text(text, encoding="utf-8")
+        written[name] = len(text)
 
     version = _read_version(target / "signatures.yaml")
     return {"dest": str(target), "files": written, "version": version}

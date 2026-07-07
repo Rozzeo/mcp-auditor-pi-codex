@@ -42,6 +42,74 @@ def _score_style(score: int) -> str:
     return "bold red"
 
 
+def render_diff(result: dict, console: Console | None = None) -> None:
+    """Human-readable view of a `diff_audits()` result (presentation only)."""
+    console = console or Console()
+    old, new = result["old"], result["new"]
+    delta = result["score_delta"]
+
+    header = Text()
+    header.append("Score: ", style="bold")
+    header.append(f"{old['score']}", style=_score_style(old["score"] or 0))
+    header.append("  ->  ")
+    header.append(f"{new['score']}", style=_score_style(new["score"] or 0))
+    if delta is not None and delta != 0:
+        header.append(f"  ({delta:+d})", style="bold green" if delta > 0 else "bold red")
+    console.print(
+        Panel(
+            header,
+            title=f"[bold]mcp-audit diff[/bold]  ·  {old['target']}  ->  {new['target']}",
+            border_style=_score_style(new["score"] or 0),
+        )
+    )
+
+    new_findings = result["new_findings"]
+    if new_findings:
+        table = Table(show_lines=True, expand=True, title=f"New findings ({len(new_findings)})")
+        table.add_column("Severity", no_wrap=True)
+        table.add_column("Rule", no_wrap=True)
+        table.add_column("Tool", no_wrap=True)
+        table.add_column("Finding")
+        for f in new_findings:
+            detail = Text(f["message"] + "\n")
+            detail.append("fix: ", style="dim")
+            detail.append(f["recommendation"], style="green")
+            table.add_row(
+                Text(f["severity"], style=_SEVERITY_STYLE.get(f["severity"], "")),
+                f["id"],
+                f.get("tool_name") or "—",
+                detail,
+            )
+        console.print(table)
+
+    resolved = result["resolved_findings"]
+    if resolved:
+        console.print(
+            "[green]Resolved:[/green] "
+            + ", ".join(f"{f['id']} ({f.get('tool_name') or 'server'})" for f in resolved)
+        )
+
+    tools = result["tools"]
+    if tools:
+        for name in tools["added"]:
+            console.print(f"[yellow]+ tool added:[/yellow] {name}")
+        for name in tools["removed"]:
+            console.print(f"[dim]- tool removed: {name}[/dim]")
+        for ch in tools["changed"]:
+            console.print(f"[yellow]~ tool changed:[/yellow] {ch['name']} ({', '.join(ch['changes'])})")
+    elif tools is None:
+        console.print("[dim]Tool-surface diff unavailable (a side is a JSON baseline).[/dim]")
+
+    if result["rug_pull_signal"]:
+        console.print(
+            "[bold red]Rug-pull signal (MCP-T05):[/bold red] the tool surface changed "
+            "between versions — re-review the added/changed tools before trusting this update."
+        )
+
+    if not new_findings and not resolved and not (tools and (tools["added"] or tools["removed"] or tools["changed"])):
+        console.print("[bold green]✓ No changes between the two audits.[/bold green]")
+
+
 def render_human(report: AuditReport, console: Console | None = None) -> None:
     console = console or Console()
 

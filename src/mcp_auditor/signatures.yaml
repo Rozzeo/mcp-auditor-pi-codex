@@ -8,8 +8,8 @@
 #
 # `version` is bumped (in lockstep with threats.yaml) whenever the set changes so
 # audits are reproducible against a known rule version (antivirus-style).
-version: 3
-released: "2026-07-03"
+version: 4
+released: "2026-07-07"
 
 rules:
   # --- Tool poisoning (MCP-T04) --------------------------------------------
@@ -238,8 +238,8 @@ rules:
     message: "Dependencies are not version-pinned and no lockfile was found (rug-pull / supply-chain mutability precondition)."
     recommendation: "Pin exact dependency versions and commit a lockfile; verify server integrity (signatures/checksums) across updates. Re-audit after each release (diff mode)."
     # Fires (file-level, info) when a dependency manifest uses floating version
-    # ranges and no lockfile is present. Temporal rug-pull detection is diff-mode
-    # (compare two audits over time) — tracked as future work.
+    # ranges and no lockfile is present. Temporal rug-pull detection is covered
+    # by `mcp-audit diff <old> <new>` (compare two audits over time).
     manifest_files:
       - "requirements.txt"
       - "package.json"
@@ -357,6 +357,115 @@ rules:
       - "http(s)?://|fetch\\(|requests\\.(get|post)|axios"
       - "forward(s|ing)?\\b"
       - "webhook|outbound|exfiltrat"
+
+  # --- Database security: SQL injection (MCP-T07) ---------------------------
+  SQ-001:
+    confidence: medium
+    category: command_injection
+    severity: critical
+    threat: MCP-T07
+    source: {ref: mcp-survey, section: "5.1.7"}
+    message: "SQL query built by string interpolation/concatenation in a tool implementation (SQL-injection sink)."
+    recommendation: "Use parameterized queries (placeholders + bound values). Never build SQL from tool inputs with f-strings, +, %, .format(), or template literals."
+    # Scanned against statically-captured tool BODIES (never executed). Patterns
+    # are kept JS-compatible so the playground can reuse them verbatim.
+    sql_interp_patterns:
+      - "f[\"'](select|insert|update|delete|drop|alter|truncate)\\b[^\"']*\\{"
+      - "[\"'](select|insert|update|delete|drop|alter|truncate)\\b[^\"']*[\"']\\s*(\\+|%)\\s*\\w"
+      - "[\"'](select|insert|update|delete|drop|alter|truncate)\\b[^\"']*[\"']\\s*\\.\\s*format\\s*\\("
+      - "`\\s*(select|insert|update|delete|drop|alter|truncate)\\b[^`]*\\$\\{"
+      - "(execute|executemany|\\.query)\\s*\\(\\s*f[\"']"
+
+  # --- Database security: raw SQL passthrough (MCP-T11) ---------------------
+  DB-001:
+    confidence: medium
+    category: over_privilege
+    severity: high
+    threat: MCP-T11
+    source: {ref: mcp-survey, section: "5.3.2"}
+    message: "Tool executes caller-supplied raw SQL (arbitrary database access through the agent)."
+    recommendation: "Expose narrow, purpose-named tools (e.g. get_order_status) instead of a generic query tool; if raw SQL is unavoidable, enforce a read-only role and an allowlist of statements."
+    # Fires when a parameter that carries raw SQL reaches an execution call in
+    # the body, or the description advertises arbitrary-SQL execution.
+    raw_sql_param_names:
+      - "sql"
+      - "query"
+      - "statement"
+      - "raw_sql"
+      - "sql_query"
+      - "sql_statement"
+    exec_signal_patterns:
+      - "\\b(execute|executemany|executescript)\\s*\\("
+      - "\\.query\\s*\\("
+      - "\\bcursor\\b"
+      - "\\.(run|exec|all|get)\\s*\\(\\s*(sql|query|statement)"
+    description_patterns:
+      - "(run|execute|perform)s? (an?y|arbitrary|raw|custom|free[- ]?form)? ?(sql|quer(y|ies))"
+      - "(an?y|arbitrary|raw|custom) sql"
+      - "sql (statement|command|quer(y|ies))s? (to|and) (run|execute)"
+
+  # --- Database security: destructive/admin SQL (MCP-T11) -------------------
+  DB-002:
+    confidence: high
+    category: over_privilege
+    severity: high
+    threat: MCP-T11
+    source: {ref: mcp-survey, section: "5.3.2"}
+    message: "Tool carries destructive or administrative SQL capability (DROP/TRUNCATE/GRANT/ALTER)."
+    recommendation: "Agent-facing database tools should run under a least-privilege role with no DDL/DCL rights. Remove destructive statements or gate them behind human approval."
+    patterns:
+      - "\\b(drop|truncate)\\s+(table|database|schema|index)\\b"
+      - "\\bgrant\\s+(all|select|insert|update|delete)\\b"
+      - "\\balter\\s+(table|user|role|database)\\b"
+      - "\\bdelete\\s+from\\s+\\w+\\s*[\"'`;)]"
+
+  # --- Data exfiltration: hardcoded outbound endpoint (MCP-T12) -------------
+  DE-001:
+    confidence: medium
+    category: data_exfiltration
+    severity: critical
+    threat: MCP-T12
+    source: {ref: mcp-survey, section: "5.3.3"}
+    message: "Tool implementation sends data to a hardcoded external endpoint (exfiltration sink)."
+    recommendation: "Remove the hardcoded endpoint. Outbound destinations must be user-supplied, allowlisted, and disclosed in the tool description."
+    # Two ways to fire: (a) a known exfil/callback host appears anywhere in the
+    # body, or (b) a hardcoded non-local URL appears together with a send call.
+    exfil_host_patterns:
+      - "webhook\\.site|requestbin|pipedream\\.net|ngrok\\.(io|app)|burpcollaborator"
+      - "discord(app)?\\.com/api/webhooks"
+      - "api\\.telegram\\.org/bot"
+      - "hooks\\.slack\\.com/services"
+    # Boundary after the local host names is required so `localhost.evil.com`
+    # is NOT treated as local. Kept JS-compatible for the playground.
+    url_pattern: "https?://(?!(?:localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0)(?:[:/'\"\\s)]|$))[a-z0-9][a-z0-9.-]+"
+    send_patterns:
+      - "requests\\.(post|put)\\s*\\("
+      - "httpx\\.(post|put)\\b"
+      - "urllib\\.request|urlopen\\s*\\("
+      - "fetch\\s*\\("
+      - "axios(\\.(post|put))?\\s*\\("
+      - "\\.post\\s*\\("
+      - "\\bcurl\\b"
+      - "websocket|socket\\.connect"
+
+  # --- Data leakage: sensitive-data surface (MCP-T13) -----------------------
+  DL-001:
+    confidence: medium
+    category: data_leakage
+    severity: medium
+    threat: MCP-T13
+    source: {ref: mcp-survey, section: "5.3.4"}
+    message: "Tool touches sensitive personal or credential data (PII / secrets tables and columns)."
+    recommendation: "Confirm the agent genuinely needs this data. Mask or exclude PII/credential columns, avoid SELECT * on sensitive tables, and log access for review."
+    patterns:
+      - "select\\s+\\*\\s+from\\s+\\w*(user|customer|account|employee|patient|member|client|payment)"
+      - "\\bssn\\b|social[ _]security"
+      - "credit[ _-]?card|card_number|\\bcvv\\b|\\bcvc\\b|\\biban\\b"
+      - "\\bpassport\\b"
+      - "password_hash|passwd\\b"
+      - "\\bsalar(y|ies)\\b|payroll"
+      - "medical[ _]record|health[ _]record|\\bdiagnosis\\b"
+      - "api_keys?\\s+(table|from)|from\\s+(api_keys|secrets|credentials|tokens)\\b"
 
   # --- Meta / unauthorized access (MCP-T13) --------------------------------
   ME-001:

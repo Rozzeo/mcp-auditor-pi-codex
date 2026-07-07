@@ -50,6 +50,17 @@ def audit(
     suppressions.py). It is never read from inside the target — a server must
     not be able to vouch for itself.
     """
+    report, _tools = audit_detailed(target, signatures_path, suppressions_path)
+    return report
+
+
+def audit_detailed(
+    target: str,
+    signatures_path: str | None = None,
+    suppressions_path: str | None = None,
+):
+    """`audit()` plus the extracted tool list — used by diff mode to compare
+    tool surfaces across versions. Same static-only guarantee."""
     if _GITHUB_URL.match(target):
         from .fetcher import fetch_github  # imported lazily; network optional
 
@@ -61,17 +72,20 @@ def audit(
     generated_at = _now_iso()
 
     if not extraction.is_mcp_server:
-        return AuditReport(
-            target=target,
-            is_mcp_server=False,
-            tools_analyzed=0,
-            score=None,
-            findings=[],
-            generated_at=generated_at,
-            message=(
-                "No MCP tool definitions or MCP SDK dependency found. "
-                "This does not appear to be an MCP server; no score was computed."
+        return (
+            AuditReport(
+                target=target,
+                is_mcp_server=False,
+                tools_analyzed=0,
+                score=None,
+                findings=[],
+                generated_at=generated_at,
+                message=(
+                    "No MCP tool definitions or MCP SDK dependency found. "
+                    "This does not appear to be an MCP server; no score was computed."
+                ),
             ),
+            [],
         )
 
     # Prefer the updated definition cache (mcp-audit update) over the bundled
@@ -97,14 +111,18 @@ def audit(
     findings.sort(key=_finding_sort_key)
     score = score_findings(findings)
 
-    return AuditReport(
-        target=target,
-        is_mcp_server=True,
-        tools_analyzed=len(extraction.tools),
-        score=score,
-        findings=findings,
-        generated_at=generated_at,
-        signature_version=signatures.get("version"),
+    return (
+        AuditReport(
+            target=target,
+            is_mcp_server=True,
+            tools_analyzed=len(extraction.tools),
+            score=score,
+            findings=findings,
+            generated_at=generated_at,
+            signature_version=signatures.get("version"),
+            tools=extraction.tools,
+        ),
+        extraction.tools,
     )
 
 

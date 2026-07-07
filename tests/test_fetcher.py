@@ -66,6 +66,49 @@ def _make_session():
     return FakeSession(routes), server_py
 
 
+def _make_tarball(files):
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for path, text in files.items():
+            data = text.encode()
+            info = tarfile.TarInfo(name=f"owner-repo-abc123/{path}")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+class FakeTarResponse:
+    def __init__(self, content):
+        self.content = content
+        self.status_code = 200
+
+    def raise_for_status(self):
+        pass
+
+
+def test_fetch_github_uses_single_tarball_request():
+    server_py = "from mcp.server.fastmcp import FastMCP\n"
+    tar = _make_tarball({
+        "server.py": server_py,
+        "README.md": "docs",
+        "node_modules/x.js": "skip me",
+    })
+    session = FakeSession({"/repos/owner/repo/tarball": FakeTarResponse(tar)})
+    files = fetch_github("https://github.com/owner/repo", session=session)
+    assert files == {"server.py": server_py}
+    # The whole repo came down in exactly one HTTP request.
+    assert session.requested == ["https://api.github.com/repos/owner/repo/tarball"]
+
+
+def test_fetch_github_falls_back_to_blobs_when_tarball_unavailable():
+    session, server_py = _make_session()
+    files = fetch_github("https://github.com/owner/repo", session=session)
+    assert files["server.py"] == server_py
+
+
 def test_fetch_github_downloads_relevant_files_only():
     session, server_py = _make_session()
     files = fetch_github("https://github.com/owner/repo", session=session)

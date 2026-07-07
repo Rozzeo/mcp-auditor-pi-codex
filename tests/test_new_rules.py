@@ -144,4 +144,4 @@ def test_findings_carry_threat_id_and_sources():
     assert ci.threat_id == "MCP-T07"
     assert ci.sources and ci.sources[0].get("section") == "5.1.7"
     # signature version is recorded on the report for reproducibility.
-    assert report.signature_version == 3
+    assert report.signature_version == SIGS["version"]

@@ -21,8 +21,8 @@
 #   rules               signature rule ids that detect this ([] = known gap)
 #   sources             paper sections / CVEs that justify the entry
 # =============================================================================
-version: 3
-released: "2026-07-03"
+version: 4
+released: "2026-07-07"
 
 # Primary source seeded into this Atlas.
 references:
@@ -187,7 +187,7 @@ threats:
       - "dangerous sinks: os.system, subprocess(..., shell=True), eval, exec"
       - "child_process.exec / spawn with unsanitized input (JS/TS)"
       - "tool input flowing into a shell without validation"
-    rules: ["CI-001"]
+    rules: ["CI-001", "SQ-001"]
     mitigations:
       - "Code-integrity verification via reproducible builds + signing."
       - "Strict dependency pinning; isolated build environments."
@@ -273,7 +273,7 @@ threats:
       - "capability far broader than the tool name implies"
       - "schema accepts unconstrained path / command / URL"
       - "binds to 0.0.0.0 / non-localhost with no auth; no directory boundary"
-    rules: ["OP-001", "OP-002", "OP-003"]
+    rules: ["OP-001", "OP-002", "OP-003", "DB-001", "DB-002"]
     mitigations:
       - "Bind only to trusted local clients with auth; scope filesystem to a dir."
       - "Validate/sanitize inputs; container/process-level isolation."
@@ -294,7 +294,7 @@ threats:
     static_detectability: "partial"
     static_signals:
       - "one server exposes a dangerous capability combination (local read + outbound network)"
-    rules: ["TC-001"]
+    rules: ["TC-001", "DE-001"]
     mitigations:
       - "Prohibit implicit chaining without explicit user approval."
       - "Restrict which outputs can be piped to which tools (e.g. file -> network)."
@@ -316,7 +316,7 @@ threats:
     static_detectability: "partial"
     static_signals:
       - "tools defined but no authentication/authorization signal detectable"
-    rules: ["ME-001"]
+    rules: ["ME-001", "DL-001"]
     mitigations:
       - "Mandatory endpoint auth on every connection; secure token storage."
       - "Token audience enforcement; periodic session rotation/invalidation."

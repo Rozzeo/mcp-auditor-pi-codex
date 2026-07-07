@@ -88,12 +88,15 @@ def main(ctx: click.Context) -> None:
 @click.option("--suppress", "suppressions_path", type=click.Path(exists=True), default=None,
               help="Auditor-side suppression file for reviewed false positives "
                    "(never read from inside the target).")
+@click.option("--html", "html_path", type=click.Path(), default=None,
+              help="Also write a self-contained HTML dashboard of the report to this path.")
 def audit_cmd(
     target: str,
     as_json: bool,
     fail_on: str | None,
     signatures_path: str | None,
     suppressions_path: str | None,
+    html_path: str | None,
 ) -> None:
     err = Console(stderr=True)
     try:
@@ -115,10 +118,102 @@ def audit_cmd(
     else:
         render_human(report, Console())
 
+    if html_path:
+        from .htmlreport import render_html
+
+        Path(html_path).write_text(render_html(report), encoding="utf-8")
+        err.print(f"[green]HTML report written[/green] -> {html_path}")
+
     if fail_on:
         if report.is_mcp_server and _at_or_above(report.findings, fail_on.lower()):
             raise SystemExit(1)
 
+    raise SystemExit(0)
+
+
+# --- diff --------------------------------------------------------------------
+
+
+@main.command(
+    name="diff",
+    help="Compare two audits of a server (old vs new version, or a saved --json "
+         "report vs a live target) — the rug-pull detector.",
+)
+@click.argument("old_target")
+@click.argument("new_target")
+@click.option("--json", "as_json", is_flag=True, help="Emit the structured diff as JSON on stdout (and nothing else).")
+@click.option(
+    "--fail-on",
+    type=click.Choice(SEVERITY_ORDER, case_sensitive=False),
+    default=None,
+    help="Exit non-zero if any NEW finding at or above this severity appeared (for CI gating).",
+)
+@click.option("--signatures", "signatures_path", type=click.Path(exists=True), default=None,
+              help="Path to a custom signatures.yaml (pins the rule version for both sides).")
+@click.option("--suppress", "suppressions_path", type=click.Path(exists=True), default=None,
+              help="Auditor-side suppression file, applied to both sides.")
+def diff_cmd(
+    old_target: str,
+    new_target: str,
+    as_json: bool,
+    fail_on: str | None,
+    signatures_path: str | None,
+    suppressions_path: str | None,
+) -> None:
+    from .diffmode import diff_audits
+    from .reporter import render_diff
+
+    err = Console(stderr=True)
+    try:
+        result = diff_audits(
+            old_target,
+            new_target,
+            signatures_path=signatures_path,
+            suppressions_path=suppressions_path,
+        )
+    except FileNotFoundError as exc:
+        err.print(f"[red]error:[/red] {exc}")
+        raise SystemExit(2)
+    except Exception as exc:
+        err.print(f"[red]error:[/red] {exc}")
+        raise SystemExit(2)
+
+    if as_json:
+        sys.stdout.write(json.dumps(result, indent=2) + "\n")
+        sys.stdout.flush()
+    else:
+        render_diff(result, Console())
+
+    if fail_on:
+        limit = _SEVERITY_RANK[fail_on.lower()]
+        if any(_SEVERITY_RANK.get(f["severity"], 99) <= limit for f in result["new_findings"]):
+            raise SystemExit(1)
+
+    raise SystemExit(0)
+
+
+# --- playground --------------------------------------------------------------
+
+
+@main.command(
+    name="playground",
+    help="Generate the interactive MCP Security Playground HTML (paste a tool, see findings live).",
+)
+@click.option("--out", "out_path", default="mcp-playground.html", show_default=True, help="Output HTML path.")
+@click.option("--signatures", "signatures_path", type=click.Path(exists=True), default=None,
+              help="Path to a custom signatures.yaml (pins the embedded rule version).")
+def playground_cmd(out_path: str, signatures_path: str | None) -> None:
+    from .playground import build_playground
+    from .rules import load_signatures
+    from .updater import effective_signatures_path
+
+    err = Console(stderr=True)
+    signatures = load_signatures(effective_signatures_path(signatures_path))
+    Path(out_path).write_text(build_playground(signatures), encoding="utf-8")
+    err.print(
+        f"[green]Playground written[/green] -> {out_path} "
+        f"(signatures v{signatures.get('version')}). Open it in a browser."
+    )
     raise SystemExit(0)
 
 
