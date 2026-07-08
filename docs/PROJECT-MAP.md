@@ -42,7 +42,9 @@ my/
 │   ├── mcp_server.py         ← аудитор сам как MCP-сервер (агент проверяет MCP до подключения)
 │   ├── updater.py            ← mcp-audit update — свежие сигнатуры без обновления пакета
 │   ├── encyclopedia.py       ← генератор HTML-энциклопедии угроз из Атласа
-│   └── intel/                ← разведка угроз: arXiv/CVE → очередь → ревью → сигнатуры
+│   └── intel/                ← разведка угроз: arXiv/CVE → очередь → ревью → сигнатуры;
+│                                статьи ранжируются по уровню площадки (top / ranked /
+│                                preprint, CVE = advisory), фильтр: intel fetch --min-tier
 │
 ├── tests/                    ← 157 тестов; fixtures/ — образцы серверов (чистый, заражённый…)
 ├── skills/ commands/ .claude-plugin/  ← интеграция с Claude Code (плагин, /audit-mcp, triage-скилл)

@@ -40,6 +40,9 @@ def parse_osv(payload: dict, package: str = "") -> list[Candidate]:
                 url=f"https://osv.dev/vulnerability/{vid}" if vid else "",
                 published=vuln.get("published", ""),
                 matched=[package] if package else [],
+                venue="OSV/CVE",
+                # A confirmed vulnerability, not a paper — always curation-worthy.
+                tier="advisory",
             )
         )
     return out

@@ -250,9 +250,29 @@ def intel_group() -> None:
 @click.option("--max-results", default=20, show_default=True, help="Max arXiv results to pull.")
 @click.option("--no-arxiv", is_flag=True, help="Skip the arXiv source.")
 @click.option("--no-cve", is_flag=True, help="Skip the CVE/advisory source.")
-def intel_fetch(queue_path: str | None, max_results: int, no_arxiv: bool, no_cve: bool) -> None:
-    from .intel import advisories, arxiv
+@click.option("--no-blogs", is_flag=True, help="Skip the researcher-blog RSS source.")
+@click.option("--no-hn", is_flag=True, help="Skip the Hacker News source.")
+@click.option(
+    "--min-tier",
+    type=click.Choice(["top", "ranked", "community", "preprint"], case_sensitive=False),
+    default="preprint",
+    show_default=True,
+    help="Quality floor: 'top' = Big-4 security venues / Q1 journals / top ML venues; "
+         "'ranked' adds other peer-reviewed venues; 'community' adds researcher blogs and "
+         "Hacker News; 'preprint' keeps everything. CVE advisories always pass.",
+)
+def intel_fetch(
+    queue_path: str | None,
+    max_results: int,
+    no_arxiv: bool,
+    no_cve: bool,
+    no_blogs: bool,
+    no_hn: bool,
+    min_tier: str,
+) -> None:
+    from .intel import advisories, arxiv, feeds, hackernews
     from .intel import queue as q
+    from .intel.model import filter_by_min_tier
 
     err = Console(stderr=True)
     path = queue_path or _default_queue_path()
@@ -267,11 +287,24 @@ def intel_fetch(queue_path: str | None, max_results: int, no_arxiv: bool, no_cve
             fetched += advisories.fetch()
         except Exception as exc:
             err.print(f"[yellow]cve fetch failed:[/yellow] {exc}")
+    if not no_blogs:
+        try:
+            fetched += feeds.fetch()
+        except Exception as exc:
+            err.print(f"[yellow]blog-feed fetch failed:[/yellow] {exc}")
+    if not no_hn:
+        try:
+            fetched += hackernews.fetch()
+        except Exception as exc:
+            err.print(f"[yellow]hn fetch failed:[/yellow] {exc}")
 
-    new = q.add_candidates(path, fetched)
+    kept = filter_by_min_tier(fetched, min_tier.lower())
+    dropped = len(fetched) - len(kept)
+    new = q.add_candidates(path, kept)
+    note = f", {dropped} below --min-tier {min_tier.lower()}" if dropped else ""
     err.print(
         f"[green]{len(new)} new candidate(s)[/green] queued at {path} "
-        f"({len(fetched)} fetched, deduped against the Atlas)."
+        f"({len(fetched)} fetched{note}, deduped against the Atlas)."
     )
     raise SystemExit(0)
 
@@ -287,13 +320,34 @@ def intel_review(queue_path: str | None) -> None:
         console.print("[dim]Review queue is empty. Run `mcp-audit intel fetch` first.[/dim]")
         raise SystemExit(0)
 
-    table = Table(show_lines=True, title="MCP intel review queue")
+    from .intel.model import TIER_ORDER
+
+    _TIER_STYLE = {
+        "advisory": "bold red",
+        "top": "bold green",
+        "ranked": "cyan",
+        "community": "yellow",
+        "preprint": "dim",
+    }
+    items.sort(key=lambda c: (TIER_ORDER.get(c.tier, 9), c.published), reverse=False)
+
+    table = Table(show_lines=True, title="MCP intel review queue (best sources first)")
+    table.add_column("Tier", no_wrap=True)
+    table.add_column("Venue", no_wrap=True)
     table.add_column("Source", no_wrap=True)
     table.add_column("Id", no_wrap=True)
     table.add_column("Title")
     table.add_column("Matched", no_wrap=True)
     for c in items:
-        table.add_row(c.source, c.ident or "—", c.title, ", ".join(c.matched[:3]))
+        tier = c.tier or "preprint"
+        table.add_row(
+            f"[{_TIER_STYLE.get(tier, '')}]{tier}[/]",
+            c.venue or "—",
+            c.source,
+            c.ident or "—",
+            c.title,
+            ", ".join(c.matched[:3]),
+        )
     console.print(table)
     console.print(f"[dim]{len(items)} item(s). Curate by hand into signatures.yaml + threats.yaml.[/dim]")
     raise SystemExit(0)

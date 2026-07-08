@@ -10,9 +10,10 @@ import re
 import xml.etree.ElementTree as ET
 from urllib.parse import urlencode
 
-from .model import Candidate, match_keywords
+from .model import Candidate, classify_venue, match_keywords
 
 ARXIV_API = "http://export.arxiv.org/api/query"
+_ARXIV_NS = "{http://arxiv.org/schemas/atom}"
 DEFAULT_QUERY = (
     'all:"Model Context Protocol" AND '
     "(security OR attack OR poisoning OR injection OR vulnerability OR exploit)"
@@ -51,6 +52,10 @@ def parse_atom(feed_text: str, keywords: list[str] | None = None) -> list[Candid
         summary = _collapse(entry.findtext(f"{_ATOM}summary") or "")
         id_url = (entry.findtext(f"{_ATOM}id") or "").strip()
         published = (entry.findtext(f"{_ATOM}published") or "").strip()
+        # Acceptance venue, when the authors recorded it ("Accepted at NDSS 2026").
+        journal_ref = _collapse(entry.findtext(f"{_ARXIV_NS}journal_ref") or "")
+        comment = _collapse(entry.findtext(f"{_ARXIV_NS}comment") or "")
+        venue, tier = classify_venue(f"{journal_ref} {comment}")
         candidates.append(
             Candidate(
                 source="arxiv",
@@ -60,6 +65,8 @@ def parse_atom(feed_text: str, keywords: list[str] | None = None) -> list[Candid
                 url=id_url,
                 published=published,
                 matched=match_keywords(f"{title} {summary}", keywords),
+                venue=venue,
+                tier=tier,
             )
         )
     return candidates
