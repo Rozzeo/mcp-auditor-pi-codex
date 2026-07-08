@@ -1,6 +1,6 @@
 {
   "name": "mcp-auditor",
-  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "image": "mcr.microsoft.com/devcontainers/python:3-3.14-bookworm",
   "postCreateCommand": "pip install --user -e '.[dev]'",
   "customizations": {
     "vscode": {
