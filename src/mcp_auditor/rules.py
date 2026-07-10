@@ -72,6 +72,8 @@ def run_rules(
             findings.extend(_pm001(tool, rules["PM-001"]))
         if "CI-001" in rules:
             findings.extend(_ci001(tool, rules["CI-001"]))
+        if "XC-001" in rules:
+            findings.extend(_xc001(tool, rules["XC-001"]))
         if "SQ-001" in rules:
             findings.extend(_sq001(tool, rules["SQ-001"]))
         if "DB-001" in rules:
@@ -283,6 +285,20 @@ def _ci001(tool: Tool, rule: dict) -> list[Finding]:
         return []
     hit = _first_match(rule.get("sink_patterns", []), body)
     return [_make(rule, "CI-001", tool, f"dangerous sink: {hit}")] if hit else []
+
+
+def _xc001(tool: Tool, rule: dict) -> list[Finding]:
+    """Fetch-and-run / RCE (MCP-T07): remote-code execution in metadata or body.
+
+    Fires on the description AND the captured body, because an agent skill's
+    dangerous step lives in its instruction text (which the agent runs), not
+    only in a bundled script. Never executed — scanned as text.
+    """
+    text = f"{tool.description}\n{getattr(tool, 'body', '') or ''}"
+    if not text.strip():
+        return []
+    hit = _first_match(rule.get("patterns", []), text)
+    return [_make(rule, "XC-001", tool, f"fetch-and-run / remote exec: {hit.strip()}")] if hit else []
 
 
 def _nc001(tools: list[Tool], rule: dict) -> list[Finding]:

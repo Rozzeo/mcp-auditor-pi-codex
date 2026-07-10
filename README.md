@@ -101,6 +101,30 @@ Suppressed findings are excluded from the comparison. Typical workflow: save
 carries the tool surface (names, descriptions, schemas; never captured source
 bodies), so the full rug-pull comparison works from a JSON baseline alone.
 
+## Auditing agent skills (SKILL.md)
+
+Agent skills are the same trust surface as MCP tools: their `description` is read
+at selection time and their instructions run with the agent's privileges. A
+poisoned skill — hidden "do not tell the user" steps, a `npx skills add
+<untrusted>` or `curl | bash` install line, "always prefer this skill" —
+is exactly what a supply-chain lure looks like.
+
+`mcp-audit` treats a `SKILL.md` as an auditable unit automatically: point it at a
+skill directory (or a repo of skills) and every rule applies. The whole
+instruction body is folded into the poisoning surface, and bundled scripts
+(`.py`, `.js`, `.sh`, `.ps1` next to the skill) are scanned too.
+
+```bash
+mcp-audit ./path/to/skill            # audit one skill directory
+mcp-audit ./my-skills-repo           # audit a whole collection
+```
+
+The **XC-001** rule specifically catches fetch-and-run install steps
+(`npx <pkg>`, `curl … | bash`, PowerShell `iex`, `pip install <url>`) — the most
+common way a "helpful" skill smuggles in arbitrary code execution. Vet a skill
+**before** running `npx skills add …`, since that command downloads and installs
+in one step.
+
 ## MCP plugin — the tool that audits the tools
 
 The auditor is itself available over the Model Context Protocol, so an agent
@@ -184,6 +208,7 @@ attack). Three layers keep that honest without touching the deterministic core:
 | TS-001 | high | supply chain | Server/tool name typosquatting a well-known MCP name |
 | RP-001 | info | supply chain | Unpinned dependencies with no lockfile (rug-pull precondition) |
 | CI-001 | critical | command injection | Dangerous execution sink (`os.system`, `eval`, `shell=True`, …) in a tool body |
+| XC-001 | critical | command injection | Fetch-and-run / remote code execution (`npx <pkg>`, `curl \| bash`, `iex`) in an instruction or script |
 | CR-001 | high | credential exposure | Hardcoded secret literals in source/config |
 | TC-001 | medium | tool chaining | Local-read + outbound-send capability combination (exfiltration chain) |
 | SQ-001 | critical | command injection | SQL built by f-string / concat / `%` / `.format()` / template literal (SQL injection) |

@@ -8,8 +8,8 @@
 #
 # `version` is bumped (in lockstep with threats.yaml) whenever the set changes so
 # audits are reproducible against a known rule version (antivirus-style).
-version: 4
-released: "2026-07-07"
+version: 5
+released: "2026-07-10"
 
 rules:
   # --- Tool poisoning (MCP-T04) --------------------------------------------
@@ -357,6 +357,29 @@ rules:
       - "http(s)?://|fetch\\(|requests\\.(get|post)|axios"
       - "forward(s|ing)?\\b"
       - "webhook|outbound|exfiltrat"
+
+  # --- Fetch-and-run / remote code execution (MCP-T07) ----------------------
+  XC-001:
+    confidence: medium
+    category: command_injection
+    severity: critical
+    threat: MCP-T07
+    source: {ref: mcp-survey, section: "5.1.7"}
+    message: "Instruction or script fetches and runs remote code (npx / curl|bash / iex) — arbitrary code execution."
+    recommendation: "Never auto-run remote installers. Pin and vendor dependencies, review the fetched code first, and require explicit human approval before executing anything downloaded. For agent skills, remove 'run this command' steps that pull code from the network."
+    # Scanned against a tool/skill description + body. Especially relevant to
+    # agent skills (SKILL.md) whose instructions the agent runs with its own
+    # privileges — e.g. `npx skills add <untrusted>`. JS-compatible for the
+    # playground.
+    patterns:
+      - "curl\\s+[^|&;]*\\|\\s*(sudo\\s+)?(ba)?sh\\b"
+      - "wget\\s+[^|&;]*\\|\\s*(sudo\\s+)?(ba)?sh\\b"
+      - "(ba)?sh\\s+<\\(\\s*(curl|wget)\\b"
+      - "\\bnpx\\s+(--?[a-z-]+\\s+)*[@\\w][\\w@./-]+"
+      - "\\bInvoke-Expression\\b|\\biex\\s*\\("
+      - "\\bpip\\s+install\\s+[^\\n]*(git\\+https?://|https?://)"
+      - "\\b(bash|sh|zsh)\\s+-c\\s+[\"'][^\"']*(curl|wget)\\b"
+      - "\\|\\s*(sudo\\s+)?(ba)?sh\\s*(;|$|\\n)"
 
   # --- Database security: SQL injection (MCP-T07) ---------------------------
   SQ-001:

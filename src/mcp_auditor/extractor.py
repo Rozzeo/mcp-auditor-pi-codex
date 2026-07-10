@@ -14,7 +14,13 @@ import json
 import re
 from dataclasses import dataclass, field
 
+import yaml
+
 from .types import Tool
+
+# Sibling files (relative to a SKILL.md) whose text is folded into the skill
+# body so code-level rules see bundled install/setup scripts.
+_SKILL_SCRIPT_EXT = (".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".bash", ".zsh", ".ps1")
 
 # --- MCP detection signals -------------------------------------------------
 
@@ -40,6 +46,8 @@ class ExtractionResult:
     tools: list[Tool] = field(default_factory=list)
     # True if an MCP SDK dependency/import was seen even when zero tools parsed.
     sdk_detected: bool = False
+    # True if at least one agent skill (SKILL.md) was found and audited.
+    skills_detected: bool = False
 
 
 def extract(files: dict[str, str]) -> ExtractionResult:
@@ -64,8 +72,80 @@ def extract(files: dict[str, str]) -> ExtractionResult:
             # Never let a single malformed file abort the whole audit.
             continue
 
+    # Agent skills (SKILL.md) are the same trust surface as MCP tools: their
+    # description is read at selection time and their instructions run with the
+    # agent's privileges. Normalize each into a Tool so every rule applies.
+    skills = _extract_skills(files)
+    tools.extend(skills)
+
     is_mcp = bool(tools) or sdk_detected
-    return ExtractionResult(is_mcp_server=is_mcp, tools=tools, sdk_detected=sdk_detected)
+    return ExtractionResult(
+        is_mcp_server=is_mcp,
+        tools=tools,
+        sdk_detected=sdk_detected,
+        skills_detected=bool(skills),
+    )
+
+
+# --- Agent skills (SKILL.md) ------------------------------------------------
+
+
+def _parse_frontmatter(text: str) -> tuple[dict | None, str]:
+    """Split a Markdown file into (YAML frontmatter dict, body). None if absent."""
+    m = re.match(r"^﻿?---\s*\n(.*?)\n---\s*\n?(.*)$", text, re.DOTALL)
+    if not m:
+        return None, text
+    try:
+        meta = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        meta = None
+    return (meta if isinstance(meta, dict) else None), m.group(2)
+
+
+def _dir_of(path: str) -> str:
+    norm = path.replace("\\", "/")
+    return norm.rsplit("/", 1)[0] if "/" in norm else ""
+
+
+def _extract_skills(files: dict[str, str]) -> list[Tool]:
+    """Turn each SKILL.md into a Tool: frontmatter name/description as metadata,
+    the instruction body plus any sibling scripts as the (never-executed) body."""
+    tools: list[Tool] = []
+    for path, text in files.items():
+        base = path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if base != "skill.md":
+            continue
+        meta, body = _parse_frontmatter(text)
+        if not isinstance(meta, dict) or not meta.get("name"):
+            continue
+        skill_dir = _dir_of(path)
+        # Fold sibling scripts (same skill directory) into the scanned body.
+        extra: list[str] = []
+        for other_path, other_text in files.items():
+            if other_path == path:
+                continue
+            other_dir = _dir_of(other_path)
+            in_skill = other_dir == skill_dir or other_dir.startswith(skill_dir + "/") if skill_dir else False
+            if in_skill and other_path.lower().endswith(_SKILL_SCRIPT_EXT):
+                extra.append(other_text)
+        full_body = body if not extra else body + "\n" + "\n".join(extra)
+        # An agent reads and OBEYS the whole SKILL.md, so the instruction body is
+        # part of the poisoning surface, not just the frontmatter description —
+        # fold it in so metadata rules (TP-001 injection, PM-001 preference,
+        # TP-003 secrets) see instructions hidden in the body. The `body` field
+        # additionally carries bundled scripts for code-level rules.
+        front_desc = str(meta.get("description", ""))
+        instruction_surface = f"{front_desc}\n\n{body}".strip()
+        tools.append(
+            Tool(
+                name=str(meta.get("name")),
+                description=instruction_surface,
+                schema={},
+                location=path,
+                body=full_body,
+            )
+        )
+    return tools
 
 
 # --- Python ----------------------------------------------------------------

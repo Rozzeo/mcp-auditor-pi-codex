@@ -21,8 +21,8 @@
 #   rules               signature rule ids that detect this ([] = known gap)
 #   sources             paper sections / CVEs that justify the entry
 # =============================================================================
-version: 4
-released: "2026-07-07"
+version: 5
+released: "2026-07-10"
 
 # Primary source seeded into this Atlas.
 references:
@@ -187,7 +187,7 @@ threats:
       - "dangerous sinks: os.system, subprocess(..., shell=True), eval, exec"
       - "child_process.exec / spawn with unsanitized input (JS/TS)"
       - "tool input flowing into a shell without validation"
-    rules: ["CI-001", "SQ-001"]
+    rules: ["CI-001", "SQ-001", "XC-001"]
     mitigations:
       - "Code-integrity verification via reproducible builds + signing."
       - "Strict dependency pinning; isolated build environments."
