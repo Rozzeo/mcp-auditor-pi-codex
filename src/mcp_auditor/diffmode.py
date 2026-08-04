@@ -4,8 +4,8 @@ The temporal detector the Atlas marks as a gap for MCP-T05 (rug pulls): a server
 that was clean at install time turns malicious in an update. `diff_audits(old,
 new)` audits both sides (or loads a saved `--json` report as a baseline) and
 reports the score delta, new/resolved findings, and tool-surface changes — an
-added tool, or a changed description/schema on an existing tool, is exactly the
-rug-pull shape.
+added tool, or changed description/schema/annotations/capabilities on an
+existing tool, is exactly the rug-pull shape.
 
 Pure computation over `AuditReport`s; no detection logic of its own.
 """
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .core import audit_detailed
-from .types import AuditReport, Finding, Tool
+from .types import AuditReport, CapabilityEvidence, Finding, Tool
 
 
 def _report_from_dict(data: dict[str, Any]) -> AuditReport:
@@ -51,6 +51,7 @@ def _report_from_dict(data: dict[str, Any]) -> AuditReport:
         generated_at=data.get("generated_at", ""),
         message=data.get("message"),
         signature_version=data.get("signature_version"),
+        policy=data.get("policy") if isinstance(data.get("policy"), dict) else None,
     )
 
 
@@ -58,6 +59,9 @@ def _load_side(
     target: str,
     signatures_path: str | None,
     suppressions_path: str | None,
+    policy_path: str | None,
+    employee: str | None,
+    agent: str | None,
 ) -> tuple[AuditReport, Optional[list[Tool]]]:
     """A diff side is either a saved report JSON (baseline) or a live target.
 
@@ -79,12 +83,31 @@ def _load_side(
                         description=str(t.get("description", "")),
                         schema=t.get("schema") if isinstance(t.get("schema"), dict) else {},
                         location=str(t.get("location", "")),
+                        annotations=t.get("annotations") if isinstance(t.get("annotations"), dict) else {},
+                        capabilities=[
+                            CapabilityEvidence(
+                                capability=str(c.get("capability", "")),
+                                evidence=str(c.get("evidence", "")),
+                                location=str(c.get("location", "")),
+                                confidence=str(c.get("confidence", "medium")),
+                                destructive=bool(c.get("destructive", False)),
+                            )
+                            for c in t.get("capabilities", [])
+                            if isinstance(c, dict) and c.get("capability")
+                        ],
                     )
                     for t in data["tools"]
                     if isinstance(t, dict) and t.get("name")
                 ]
             return _report_from_dict(data), tools
-    report, tools = audit_detailed(target, signatures_path, suppressions_path)
+    report, tools = audit_detailed(
+        target,
+        signatures_path,
+        suppressions_path,
+        policy_path,
+        employee,
+        agent,
+    )
     return report, tools
 
 
@@ -121,6 +144,10 @@ def _diff_tools(old: list[Tool], new: list[Tool]) -> dict[str, Any]:
             changes.append("description")
         if o.schema != n.schema:
             changes.append("schema")
+        if o.annotations != n.annotations:
+            changes.append("annotations")
+        if {c.capability for c in o.capabilities} != {c.capability for c in n.capabilities}:
+            changes.append("capabilities")
         if changes:
             changed.append({"name": name, "changes": changes})
     return {"added": added, "removed": removed, "changed": changed}
@@ -131,10 +158,17 @@ def diff_audits(
     new_target: str,
     signatures_path: str | None = None,
     suppressions_path: str | None = None,
+    policy_path: str | None = None,
+    employee: str | None = None,
+    agent: str | None = None,
 ) -> dict[str, Any]:
     """Audit (or load) both sides and return the structured diff."""
-    old_report, old_tools = _load_side(old_target, signatures_path, suppressions_path)
-    new_report, new_tools = _load_side(new_target, signatures_path, suppressions_path)
+    old_report, old_tools = _load_side(
+        old_target, signatures_path, suppressions_path, policy_path, employee, agent
+    )
+    new_report, new_tools = _load_side(
+        new_target, signatures_path, suppressions_path, policy_path, employee, agent
+    )
 
     old_active = _active(old_report.findings)
     new_active = _active(new_report.findings)
@@ -160,6 +194,7 @@ def diff_audits(
             "tools_analyzed": r.tools_analyzed,
             "generated_at": r.generated_at,
             "signature_version": r.signature_version,
+            "policy": r.policy,
         }
 
     return {

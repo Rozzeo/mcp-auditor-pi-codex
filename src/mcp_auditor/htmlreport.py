@@ -78,6 +78,12 @@ header .target { font-family: ui-monospace, monospace; font-size: 14px; color: v
 .suppressed .msg { text-decoration: line-through; }
 .sup-note { font-size: 12px; font-style: italic; color: var(--muted); margin-bottom: 6px; }
 .clean { text-align: center; padding: 40px 20px; color: var(--good); font-weight: 600; }
+.cap-list { display: grid; gap: 10px; }
+.cap-row { display: grid; grid-template-columns: 160px 1fr; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.cap-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.cap-tool { font-family: ui-monospace, monospace; font-weight: 600; }
+.policy-decision { font-size: 22px; font-weight: 750; margin-bottom: 8px; }
+.policy-line { font-size: 13px; color: var(--ink-2); margin-top: 5px; }
 footer { margin-top: 32px; font-size: 12px; color: var(--muted); }
 """
 
@@ -135,6 +141,8 @@ def render_html(report: AuditReport) -> str:
         if cat_counts
         else ""
     )
+    capability_card = _capability_card(report)
+    policy_card = _policy_card(report)
 
     if report.findings:
         cards = "".join(_finding_card(f) for f in report.findings)
@@ -158,9 +166,56 @@ def render_html(report: AuditReport) -> str:
   </div>
 </div>
 {bars_card}
+{capability_card}
+{policy_card}
 {findings_html}
 """
     return _page(report, body)
+
+
+def _capability_card(report: AuditReport) -> str:
+    rows = []
+    for tool in report.tools or []:
+        if not tool.capabilities and not tool.annotations:
+            continue
+        inferred = ", ".join(sorted({item.capability for item in tool.capabilities})) or "none observed"
+        annotations = ", ".join(
+            f"{key}={str(value).lower()}" for key, value in tool.annotations.items()
+        ) or "none declared"
+        rows.append(
+            f'<div class="cap-row"><span class="cap-tool">{_esc(tool.name)}</span>'
+            f'<span><b>Observed:</b> {_esc(inferred)}<br><b>Annotations:</b> {_esc(annotations)}</span></div>'
+        )
+    if not rows:
+        return ""
+    return '<div class="card" style="margin-bottom:16px"><h2>Observed tool capabilities</h2><div class="cap-list">' + "".join(rows) + "</div></div>"
+
+
+def _policy_card(report: AuditReport) -> str:
+    if not report.policy:
+        return ""
+    policy = report.policy
+    decision = policy.get("decision", "manual_review")
+    color = {"allow": "var(--good)", "deny": "var(--crit)", "manual_review": "var(--warn)"}.get(
+        decision, "var(--warn)"
+    )
+    identity = f"{policy.get('department')} / {policy.get('employee')}"
+    if policy.get("agent"):
+        identity += f" / {policy['agent']}"
+    unclassified = policy.get("coverage", {}).get("unclassified_tools", [])
+    manual = (
+        f'<p class="policy-line"><b>Manual review:</b> implementation unavailable for {_esc(", ".join(unclassified))}</p>'
+        if unclassified
+        else ""
+    )
+    return f'''
+<div class="card" style="margin-bottom:16px">
+  <h2>Department privilege policy · {_esc(identity)}</h2>
+  <div class="policy-decision" style="color:{color}">{_esc(str(decision).upper())}</div>
+  <p class="policy-line"><b>Effective allow:</b> {_esc(", ".join(policy.get("effective_allow", [])) or "none")}</p>
+  <p class="policy-line"><b>Requested:</b> {_esc(", ".join(policy.get("requested", [])) or "none observed")}</p>
+  {manual}
+</div>'''
 
 
 def _finding_card(f) -> str:

@@ -93,6 +93,7 @@ def test_list_rules_matches_signature_set():
     ids = {r["id"] for r in payload["rules"]}
     assert {"TP-001", "TP-002", "TP-003", "TP-004", "OP-001", "OP-002"} <= ids
     assert payload["version"] is not None
+    assert all(rule["threat_id"] for rule in payload["rules"])
 
 
 def test_explain_threat_roundtrip():

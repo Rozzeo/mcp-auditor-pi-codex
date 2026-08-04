@@ -10,6 +10,7 @@ import re
 from datetime import datetime, timezone
 
 from .atlas import load_atlas_safe, resolve_sources
+from .capabilities import infer_all
 from .extractor import extract
 from .loader import load_local
 from .rules import load_signatures, run_rules
@@ -43,6 +44,9 @@ def audit(
     target: str,
     signatures_path: str | None = None,
     suppressions_path: str | None = None,
+    policy_path: str | None = None,
+    employee: str | None = None,
+    agent: str | None = None,
 ) -> AuditReport:
     """Statically audit an MCP server target (local path or GitHub URL).
 
@@ -50,7 +54,14 @@ def audit(
     suppressions.py). It is never read from inside the target — a server must
     not be able to vouch for itself.
     """
-    report, _tools = audit_detailed(target, signatures_path, suppressions_path)
+    report, _tools = audit_detailed(
+        target,
+        signatures_path,
+        suppressions_path,
+        policy_path,
+        employee,
+        agent,
+    )
     return report
 
 
@@ -58,6 +69,9 @@ def audit_detailed(
     target: str,
     signatures_path: str | None = None,
     suppressions_path: str | None = None,
+    policy_path: str | None = None,
+    employee: str | None = None,
+    agent: str | None = None,
 ):
     """`audit()` plus the extracted tool list — used by diff mode to compare
     tool surfaces across versions. Same static-only guarantee."""
@@ -69,6 +83,7 @@ def audit_detailed(
         files = load_local(target)
 
     extraction = extract(files)
+    infer_all(extraction.tools)
     generated_at = _now_iso()
 
     if not extraction.is_mcp_server:
@@ -93,6 +108,20 @@ def audit_detailed(
     signatures = load_signatures(effective_signatures_path(signatures_path))
     has_auth = _detect_auth_signal(files)
     findings = run_rules(extraction.tools, signatures, has_auth_signal=has_auth, files=files)
+    policy_report = None
+    if policy_path:
+        from .policy import evaluate_policy, load_policy, resolve_policy
+
+        policy = load_policy(policy_path)
+        resolved = resolve_policy(policy, employee=employee, agent=agent)
+        policy_findings, policy_report = evaluate_policy(
+            extraction.tools,
+            resolved,
+            signatures["rules"]["PV-001"],
+        )
+        findings.extend(policy_findings)
+    elif employee is not None or agent is not None:
+        raise ValueError("--employee/--agent require an explicit --policy file")
 
     # Enrich each finding with the research/CVE citations from the Threat Atlas.
     # Best-effort: if the Atlas is missing, detection still stands, just uncited.
@@ -121,6 +150,7 @@ def audit_detailed(
             generated_at=generated_at,
             signature_version=signatures.get("version"),
             tools=extraction.tools,
+            policy=policy_report,
         ),
         extraction.tools,
     )

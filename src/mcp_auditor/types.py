@@ -26,7 +26,37 @@ CATEGORIES = [
     "tool_chaining",
     "data_exfiltration",
     "data_leakage",
+    "capability_mismatch",
+    "policy_violation",
 ]
+
+
+@dataclass(frozen=True)
+class CapabilityEvidence:
+    """One statically inferred capability with auditable source evidence.
+
+    ``capability`` uses a small, policy-friendly namespace such as
+    ``filesystem.read`` or ``network.outbound``.  The evidence is deliberately
+    a short source fragment/API name rather than the whole handler body, so it
+    can safely travel in JSON reports and departmental approval records.
+    """
+
+    capability: str
+    evidence: str
+    location: str = ""
+    confidence: str = "medium"
+    destructive: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "capability": self.capability,
+            "evidence": self.evidence,
+            "confidence": self.confidence,
+            "destructive": self.destructive,
+        }
+        if self.location:
+            out["location"] = self.location
+        return out
 
 
 @dataclass
@@ -43,6 +73,12 @@ class Tool:
     # Optional statically-captured function body text (never executed). Used by
     # code-level rules such as CI-001. Empty for manifest/text extractions.
     body: str = ""
+    # MCP ToolAnnotations are untrusted behavioral hints.  They are retained so
+    # deterministic analysis can compare the claim with the observed handler.
+    annotations: dict[str, Any] = field(default_factory=dict)
+    # Static capability inference. Populated after extraction, before rules and
+    # optional departmental policy evaluation run.
+    capabilities: list[CapabilityEvidence] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -53,6 +89,10 @@ class Tool:
         }
         if self.body:
             out["body"] = self.body
+        if self.annotations:
+            out["annotations"] = self.annotations
+        if self.capabilities:
+            out["capabilities"] = [c.to_dict() for c in self.capabilities]
         return out
 
 
@@ -118,8 +158,11 @@ class AuditReport:
     signature_version: Optional[int] = None
     # The extracted tool surface (added in v3, additive) so a saved --json
     # report works as a full diff baseline (rug-pull detection). Serialized
-    # slim — name/description/schema/location, never the captured body text.
+    # slim — metadata plus inferred capabilities, never the captured body text.
     tools: Optional[list[Tool]] = None
+    # Present only when an explicit auditor-side privilege policy was supplied.
+    # The target can never provide or auto-enable its own policy.
+    policy: Optional[dict[str, Any]] = None
 
     def summary(self) -> dict[str, int]:
         counts = {sev: 0 for sev in SEVERITY_ORDER}
@@ -149,7 +192,15 @@ class AuditReport:
                     "description": t.description,
                     "schema": t.schema,
                     "location": t.location,
+                    **({"annotations": t.annotations} if t.annotations else {}),
+                    **(
+                        {"capabilities": [c.to_dict() for c in t.capabilities]}
+                        if t.capabilities
+                        else {}
+                    ),
                 }
                 for t in self.tools
             ]
+        if self.policy is not None:
+            out["policy"] = self.policy
         return out

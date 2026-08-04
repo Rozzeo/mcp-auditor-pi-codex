@@ -3,6 +3,6 @@
 __version__ = "0.1.0"
 
 from .core import audit
-from .types import AuditReport, Finding, Tool
+from .types import AuditReport, CapabilityEvidence, Finding, Tool
 
-__all__ = ["audit", "AuditReport", "Finding", "Tool"]
+__all__ = ["audit", "AuditReport", "CapabilityEvidence", "Finding", "Tool"]

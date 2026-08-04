@@ -1,0 +1,74 @@
+version: 1
+
+departments:
+  engineering:
+    # Hard ceiling: no role, employee, main agent, or helper can exceed it.
+    capability_ceiling:
+      allow:
+        - filesystem.read
+        - filesystem.write
+        - filesystem.delete
+        - database.read
+        - database.write
+        - network.outbound
+        - environment.read
+      deny:
+        - database.raw-query
+        - database.destructive
+        - process.execute
+        - secrets.read
+
+    roles:
+      builder:
+        allow:
+          - filesystem.read
+          - filesystem.write
+          - filesystem.delete
+          - network.outbound
+          - environment.read
+        deny: []
+
+      helper:
+        allow:
+          - filesystem.read
+        deny:
+          - filesystem.write
+          - filesystem.delete
+          - network.outbound
+          - process.execute
+          - secrets.read
+          - environment.read
+
+      reviewer:
+        allow:
+          - filesystem.read
+        deny:
+          - filesystem.write
+          - filesystem.delete
+          - network.outbound
+          - process.execute
+          - secrets.read
+          - environment.read
+
+employees:
+  alice:
+    department: engineering
+    role: builder
+    deny: []
+
+  bob:
+    department: engineering
+    role: reviewer
+    deny: []
+
+agents:
+  alice-main:
+    employee: alice
+    profile: builder
+    deny: []
+
+  alice-helper:
+    employee: alice
+    parent: alice-main
+    profile: helper
+    deny: []

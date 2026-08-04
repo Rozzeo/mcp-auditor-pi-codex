@@ -49,6 +49,7 @@ mcp-audit ./my-server --fail-on high  # exit non-zero if any high+ finding exist
 mcp-audit ./my-server --html report.html   # also write a shareable HTML dashboard
 mcp-audit playground                  # generate the interactive MCP Security Playground
 mcp-audit diff ./server-v1 ./server-v2     # what changed between two versions (rug pulls)
+mcp-audit ./my-server --policy examples/department-policy.yaml --agent alice-helper
 ```
 
 - **Default (human):** colored terminal output — score, per-severity counts, and
@@ -59,6 +60,39 @@ mcp-audit diff ./server-v1 ./server-v2     # what changed between two versions (
   severity exists. Severities: `critical`, `high`, `medium`, `low`, `info`.
 
 For GitHub URLs, set `GITHUB_TOKEN` to raise the API rate limit (optional).
+
+## Department and main/helper privilege policies
+
+An MCP server does not have one universal risk level: the same tool may be
+acceptable for a builder and forbidden for a read-only helper. An explicit
+auditor-side policy resolves privileges through a narrowing-only hierarchy:
+
+```
+department ceiling -> employee role -> employee -> parent/main agent -> helper profile -> agent
+```
+
+Every allow layer intersects the previous one and every deny wins. A helper can
+never gain a capability unavailable to its employee or parent agent. Policies
+are never auto-loaded from the audited repository.
+
+```bash
+mcp-audit ./server \
+  --policy examples/department-policy.yaml \
+  --agent alice-helper
+```
+
+The report lists statically observed capabilities (`filesystem.read/write`,
+`database.read/write/raw-query/destructive`, `network.outbound`,
+`process.execute`, `environment.read`, `secrets.read`), the effective privilege list, policy
+violations, and analysis coverage. See
+[`docs/PRIVILEGE-POLICY.md`](docs/PRIVILEGE-POLICY.md) for the complete model.
+
+JavaScript/TypeScript extraction recognizes current
+`registerTool(name, config, handler)`, legacy `server.tool(...)`, and low-level
+`setRequestHandler("tools/list", ...)` definitions. MCP annotations such as
+`readOnlyHint` and `destructiveHint` are retained but treated as untrusted hints:
+the auditor compares them with capabilities observed in the handler and reports
+contradictions.
 
 ## Visual reports & playground
 
@@ -94,7 +128,8 @@ mcp-audit diff old new --fail-on high           # CI gate: fail if a NEW high+ f
 
 It reports the score delta, **new findings** (with fixes), **resolved
 findings**, and the tool-surface change list — an added tool or a changed
-description/schema on an existing tool raises an explicit **rug-pull signal**.
+description/schema, annotations, or inferred capabilities on an existing tool
+raises an explicit **rug-pull signal**.
 Suppressed findings are excluded from the comparison. Typical workflow: save
 `mcp-audit ./server --json > baseline.json` at approval time, then re-run
 `mcp-audit diff baseline.json ./server` after every update — the saved report
@@ -191,6 +226,10 @@ attack). Three layers keep that honest without touching the deterministic core:
 | DB-002 | high | over-privilege | Destructive/admin SQL capability (`DROP`, `TRUNCATE`, `GRANT`, `ALTER`) |
 | DE-001 | critical | data exfiltration | Data sent to a hardcoded external endpoint or known callback host |
 | DL-001 | medium | data leakage | Sensitive PII/credential tables and columns (`SELECT * FROM users`, SSN, card numbers) |
+| CP-001 | high | capability mismatch | `readOnlyHint=true` contradicts a mutating handler capability |
+| CP-002 | high | capability mismatch | `destructiveHint=false` contradicts a destructive handler operation |
+| CP-003 | medium | capability mismatch | `openWorldHint=false` contradicts outbound network access |
+| PV-001 | high | policy violation | Inferred capability exceeds the selected department/employee/agent privilege list |
 | ME-001 | info | meta | Tools defined but no authentication signal detected |
 
 The `SQ/DB/DE/DL` block exists for the headline corporate risk: employees
@@ -236,6 +275,27 @@ detection logic lives — CLI and JSON are thin wrappers):
       "recommendation": "Remove instruction-like text from tool descriptions."
     }
   ],
+  "tools": [
+    {
+      "name": "send_email",
+      "description": "Send an email",
+      "schema": { "type": "object", "properties": {} },
+      "location": "server.ts:20",
+      "capabilities": [
+        {
+          "capability": "network.outbound", "evidence": "fetch(",
+          "confidence": "high", "destructive": false, "location": "server.ts:24"
+        }
+      ]
+    }
+  ],
+  "policy": {                    // only when --policy is supplied
+    "department": "engineering",
+    "employee": "alice",
+    "agent": "alice-helper",
+    "decision": "deny",
+    "effective_allow": ["filesystem.read"]
+  },
   "summary": { "critical": 1, "high": 2, "medium": 0, "low": 1, "info": 3 },
   "generated_at": "2026-06-26T00:00:00Z"
 }
@@ -272,8 +332,11 @@ rules:
 
 - **Python:** MCP SDK usage (`from mcp...`, `FastMCP`, `@server.tool` /
   `@mcp.tool` decorators). Parsed with the `ast` module.
-- **TypeScript / JavaScript:** `@modelcontextprotocol/sdk` imports and
-  `server.tool(...)` / `registerTool(...)` registrations.
+- **TypeScript / JavaScript:** `@modelcontextprotocol/sdk` and current
+  `@modelcontextprotocol/server` imports; legacy `server.tool(...)`, current
+  `registerTool(name, config, handler)`, and low-level `tools/list` handlers.
+  Handler capabilities use a comment-aware structural scan; dynamic imports,
+  wrapper functions, and generated dispatch remain explicitly reported limits.
 - **Manifest:** any JSON listing tools with `name` + `description` + `inputSchema`.
 
 ## Development

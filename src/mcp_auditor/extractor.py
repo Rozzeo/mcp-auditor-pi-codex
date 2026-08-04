@@ -20,9 +20,7 @@ from .types import Tool
 
 _PY_MCP_IMPORT = re.compile(r"^\s*(from|import)\s+mcp(\.|\s|$)", re.MULTILINE)
 _PY_FASTMCP = re.compile(r"\bFastMCP\b")
-_TS_MCP_IMPORT = re.compile(r"""@modelcontextprotocol/sdk""")
-_TS_TOOL_CALL = re.compile(r"\b(?:server|mcp)\.tool\s*\(|registerTool\s*\(|setRequestHandler\s*\(")
-
+_TS_MCP_IMPORT = re.compile(r"""@modelcontextprotocol/(?:sdk|server)""")
 _PY_EXT = (".py",)
 _TS_EXT = (".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx")
 _JSON_EXT = (".json",)
@@ -87,6 +85,12 @@ def _extract_python(path: str, text: str) -> tuple[bool, list[Tool]]:
         tree = ast.parse(text)
     except SyntaxError:
         return sdk, tools
+
+    # `@app.tool` is used by unrelated frameworks too. Without an MCP import or
+    # FastMCP symbol, treating every such decorator as MCP creates high-noise
+    # false positives in ordinary Python applications.
+    if not sdk:
+        return False, []
 
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -173,18 +177,27 @@ def _annotation_to_json_type(annotation):
 # Matches server.tool("name", "description", { schema }, handler) and the
 # registerTool("name", { description, inputSchema }, handler) shapes.
 _TS_TOOL_STRING = re.compile(
-    r"""(?:server|mcp)\.tool\s*\(\s*["'`]([^"'`]+)["'`]\s*,\s*["'`]([^"'`]*)["'`]""",
+    r"""[A-Za-z_$][\w$]*\.tool\s*\(\s*["'`]([^"'`]+)["'`]\s*,\s*["'`]([^"'`]*)["'`]""",
     re.DOTALL,
 )
 _TS_REGISTER = re.compile(
-    r"""registerTool\s*\(\s*["'`]([^"'`]+)["'`]""",
+    r"""[A-Za-z_$][\w$]*\.registerTool\s*\(\s*["'`]([^"'`]+)["'`]""",
+    re.DOTALL,
+)
+_TS_LOW_LEVEL_LIST = re.compile(
+    r"""setRequestHandler\s*\(\s*(?:["'`]tools/list["'`]|ListToolsRequestSchema)""",
     re.DOTALL,
 )
 
 
 def _extract_typescript(path: str, text: str) -> tuple[bool, list[Tool]]:
-    sdk = bool(_TS_MCP_IMPORT.search(text) or _TS_TOOL_CALL.search(text))
+    sdk = bool(_TS_MCP_IMPORT.search(text))
     tools: list[Tool] = []
+
+    # registerTool/setRequestHandler are generic names. Require the official SDK
+    # package signal before interpreting their call shapes as MCP definitions.
+    if not sdk:
+        return False, []
 
     for m in _TS_TOOL_STRING.finditer(text):
         name, desc = m.group(1), m.group(2)
@@ -196,12 +209,29 @@ def _extract_typescript(path: str, text: str) -> tuple[bool, list[Tool]]:
     for m in _TS_REGISTER.finditer(text):
         name = m.group(1)
         line = text.count("\n", 0, m.start()) + 1
-        # Pull description from a `description:` field in the config object if present.
-        tail = text[m.end(): m.end() + 600]
-        dm = re.search(r"""description\s*:\s*["'`]([^"'`]*)["'`]""", tail)
+        # v2 uses registerTool(name, {description, inputSchema, annotations}, handler).
+        config = _ts_object_after(text, m.end(), max_distance=600)
+        dm = re.search(r"""description\s*:\s*["'`]([^"'`]*)["'`]""", config, re.DOTALL)
         desc = dm.group(1) if dm else ""
         body = _ts_call_span(text, m.start())
-        tools.append(Tool(name=name, description=desc, schema={}, location=f"{path}:{line}", body=body))
+        tools.append(
+            Tool(
+                name=name,
+                description=desc,
+                schema=_ts_register_schema(config),
+                location=f"{path}:{line}",
+                body=body,
+                annotations=_ts_annotations(config),
+            )
+        )
+
+    # Low-level SDK form: setRequestHandler("tools/list", () => ({tools: [...]})).
+    # The descriptors are extractable, but tools/call dispatch may be dynamic, so
+    # these tools intentionally carry no implementation body unless a dedicated
+    # handler can be associated in a future interprocedural pass.
+    for m in _TS_LOW_LEVEL_LIST.finditer(text):
+        call = _ts_call_span(text, m.start())
+        tools.extend(_extract_low_level_tool_list(path, text, m.start(), call))
 
     if tools:
         sdk = True
@@ -237,6 +267,165 @@ def _ts_call_span(text: str, start: int) -> str:
                 return text[start: i + 1]
         prev = ch
     return text[start:end_limit]
+
+
+def _balanced_delimited(text: str, start: int, opener: str, closer: str) -> str:
+    """Return one balanced JS/TS delimited span, aware of strings/comments."""
+    if start < 0 or start >= len(text) or text[start] != opener:
+        return ""
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    line_comment = False
+    block_comment = False
+    i = start
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if line_comment:
+            if ch == "\n":
+                line_comment = False
+            i += 1
+            continue
+        if block_comment:
+            if ch == "*" and nxt == "/":
+                block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+        elif ch == "/" and nxt == "/":
+            line_comment = True
+            i += 2
+            continue
+        elif ch == "/" and nxt == "*":
+            block_comment = True
+            i += 2
+            continue
+        elif ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+        i += 1
+    return ""
+
+
+def _ts_object_after(text: str, pos: int, max_distance: int = 300) -> str:
+    brace = text.find("{", pos, min(len(text), pos + max_distance))
+    return _balanced_delimited(text, brace, "{", "}") if brace != -1 else ""
+
+
+def _ts_register_schema(config: str) -> dict:
+    """Extract common v2 inputSchema forms without evaluating JavaScript."""
+    marker = re.search(r"\binputSchema\s*:", config)
+    if not marker:
+        return {}
+    tail = config[marker.end():]
+    # z.object({ path: z.string() }) and Standard Schema object literals both
+    # expose a first object containing the parameter keys.
+    obj = _ts_object_after(tail, 0, max_distance=240)
+    if not obj:
+        return {}
+    props: dict[str, dict] = {}
+    for key in re.findall(r"(?:^|[,{}])\s*([A-Za-z_$][\w$]*)\s*:", obj):
+        if key not in {"type", "properties", "required", "description", "title", "$schema"}:
+            props.setdefault(key, {})
+    # Raw JSON Schema nests actual fields below `properties`; prefer those when
+    # the common marker is present.
+    pm = re.search(r"\bproperties\s*:", obj)
+    if pm:
+        pobj = _ts_object_after(obj, pm.end(), max_distance=80)
+        nested = {
+            key: {}
+            for key in re.findall(r"(?:^|[,{}])\s*([A-Za-z_$][\w$]*)\s*:", pobj)
+            if key not in {"type", "description", "title", "format", "pattern"}
+        }
+        if nested:
+            props = nested
+    return {"type": "object", "properties": props} if props else {}
+
+
+def _ts_annotations(config: str) -> dict:
+    marker = re.search(r"\bannotations\s*:", config)
+    if not marker:
+        return {}
+    obj = _ts_object_after(config, marker.end(), max_distance=80)
+    if not obj:
+        return {}
+    out: dict[str, bool] = {}
+    for key in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"):
+        match = re.search(rf"\b{key}\s*:\s*(true|false)\b", obj, re.IGNORECASE)
+        if match:
+            out[key] = match.group(1).lower() == "true"
+    return out
+
+
+def _top_level_objects(array_text: str) -> list[str]:
+    out: list[str] = []
+    depth = 0
+    start = -1
+    quote: str | None = None
+    escaped = False
+    for i, ch in enumerate(array_text):
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start != -1:
+                out.append(array_text[start:i + 1])
+                start = -1
+    return out
+
+
+def _extract_low_level_tool_list(path: str, full_text: str, call_start: int, call: str) -> list[Tool]:
+    marker = re.search(r"\btools\s*:\s*\[", call)
+    if not marker:
+        return []
+    bracket = call.find("[", marker.start())
+    array = _balanced_delimited(call, bracket, "[", "]")
+    tools: list[Tool] = []
+    for obj in _top_level_objects(array[1:-1] if array else ""):
+        nm = re.search(r"\bname\s*:\s*[" + "\"'`" + r"]([^\"'`]+)[\"'`]", obj)
+        if not nm:
+            continue
+        dm = re.search(r"\bdescription\s*:\s*[\"'`]([^\"'`]*)[\"'`]", obj, re.DOTALL)
+        absolute = call_start + call.find(obj)
+        line = full_text.count("\n", 0, max(call_start, absolute)) + 1
+        tools.append(
+            Tool(
+                name=nm.group(1),
+                description=dm.group(1) if dm else "",
+                schema=_ts_register_schema(obj),
+                location=f"{path}:{line}",
+                annotations=_ts_annotations(obj),
+            )
+        )
+    return tools
 
 
 def _ts_schema_after(text: str, pos: int) -> dict:
@@ -296,6 +485,7 @@ def _extract_manifest(path: str, text: str) -> list[Tool]:
                 description=str(entry.get("description", "")),
                 schema=schema if isinstance(schema, dict) else {},
                 location=path,
+                annotations=entry.get("annotations") if isinstance(entry.get("annotations"), dict) else {},
             )
         )
     return tools

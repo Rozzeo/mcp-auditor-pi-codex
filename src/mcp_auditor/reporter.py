@@ -139,6 +139,39 @@ def render_human(report: AuditReport, console: Console | None = None) -> None:
     console.print(counts)
     console.print(f"Tools analyzed: {report.tools_analyzed}", style="dim")
 
+    capability_rows = [tool for tool in report.tools or [] if tool.capabilities or tool.annotations]
+    if capability_rows:
+        capability_table = Table(show_lines=True, expand=True, title="Observed tool capabilities")
+        capability_table.add_column("Tool", no_wrap=True)
+        capability_table.add_column("Inferred from implementation")
+        capability_table.add_column("Declared MCP annotations")
+        for tool in capability_rows:
+            inferred = ", ".join(sorted({item.capability for item in tool.capabilities})) or "—"
+            declared = ", ".join(f"{key}={str(value).lower()}" for key, value in tool.annotations.items()) or "—"
+            capability_table.add_row(tool.name, inferred, declared)
+        console.print(capability_table)
+
+    if report.policy:
+        policy = report.policy
+        decision = policy.get("decision", "manual_review")
+        style = {"allow": "bold green", "deny": "bold red", "manual_review": "bold yellow"}.get(
+            decision, "yellow"
+        )
+        identity = f"{policy.get('department')} / {policy.get('employee')}"
+        if policy.get("agent"):
+            identity += f" / {policy['agent']}"
+        body = Text()
+        body.append(f"Decision: {decision.upper()}\n", style=style)
+        body.append("Effective allow: ", style="bold")
+        body.append(", ".join(policy.get("effective_allow", [])) or "none")
+        body.append("\nRequested: ", style="bold")
+        body.append(", ".join(policy.get("requested", [])) or "none observed")
+        unclassified = policy.get("coverage", {}).get("unclassified_tools", [])
+        if unclassified:
+            body.append("\nManual review (implementation unavailable): ", style="bold yellow")
+            body.append(", ".join(unclassified))
+        console.print(Panel(body, title=f"[bold]Privilege policy[/bold] · {identity}", border_style=style))
+
     if not report.findings:
         console.print("\n[bold green]✓ No findings.[/bold green] This server looks clean.")
         return

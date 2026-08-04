@@ -21,8 +21,8 @@
 #   rules               signature rule ids that detect this ([] = known gap)
 #   sources             paper sections / CVEs that justify the entry
 # =============================================================================
-version: 4
-released: "2026-07-07"
+version: 5
+released: "2026-08-04"
 
 # Primary source seeded into this Atlas.
 references:
@@ -31,6 +31,10 @@ references:
     title: "Model Context Protocol (MCP): Landscape, Security Threats, and Future Research Directions"
     arxiv: "2503.23278"
     url: "https://arxiv.org/abs/2503.23278"
+  - key: mcp-tool-annotations-spec
+    type: standard
+    title: "Model Context Protocol specification — ToolAnnotations"
+    url: "https://modelcontextprotocol.io/specification/2025-11-25/schema#toolannotations"
 
 threats:
   # --- Creation phase: malicious developer ---------------------------------
@@ -273,7 +277,8 @@ threats:
       - "capability far broader than the tool name implies"
       - "schema accepts unconstrained path / command / URL"
       - "binds to 0.0.0.0 / non-localhost with no auth; no directory boundary"
-    rules: ["OP-001", "OP-002", "OP-003", "DB-001", "DB-002"]
+      - "inferred capability exceeds the auditor-selected departmental privilege policy"
+    rules: ["OP-001", "OP-002", "OP-003", "DB-001", "DB-002", "PV-001"]
     mitigations:
       - "Bind only to trusted local clients with auth; scope filesystem to a dir."
       - "Validate/sanitize inputs; container/process-level isolation."
@@ -381,3 +386,27 @@ threats:
       - "Immutable signed runtime manifests; rollback + continuous compliance audit."
     sources:
       - {ref: mcp-survey, section: "5.4.3"}
+
+  # --- Cross-phase: misleading declared capabilities -----------------------
+  - id: MCP-T17
+    name: "Misleading Capability Annotations"
+    aliases: ["annotation mismatch", "false read-only declaration"]
+    attacker: malicious_developer
+    lifecycle: tool_registration
+    phase_group: creation
+    severity: high
+    summary: >-
+      A tool advertises read-only, non-destructive, or closed-world behavior but
+      its registered implementation exposes contradictory side effects. MCP
+      ToolAnnotations are hints and cannot be used as an authorization boundary.
+    static_detectability: "yes"
+    static_signals:
+      - "readOnlyHint=true plus a filesystem/database/process mutation"
+      - "destructiveHint=false plus a destructive source operation"
+      - "openWorldHint=false plus outbound network access"
+    rules: ["CP-001", "CP-002", "CP-003"]
+    mitigations:
+      - "Treat annotations as untrusted hints and compare them with implementation evidence."
+      - "Enforce permissions outside the MCP server with a reviewed privilege policy."
+    sources:
+      - {ref: mcp-tool-annotations-spec, section: "ToolAnnotations"}

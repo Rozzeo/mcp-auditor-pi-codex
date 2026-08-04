@@ -88,6 +88,12 @@ def main(ctx: click.Context) -> None:
 @click.option("--suppress", "suppressions_path", type=click.Path(exists=True), default=None,
               help="Auditor-side suppression file for reviewed false positives "
                    "(never read from inside the target).")
+@click.option("--policy", "policy_path", type=click.Path(exists=True), default=None,
+              help="Auditor-side department privilege policy (never read from the target).")
+@click.option("--employee", default=None,
+              help="Employee identity from --policy; required unless --agent selects it.")
+@click.option("--agent", default=None,
+              help="Main/helper agent identity from --policy; inherits and narrows employee privileges.")
 @click.option("--html", "html_path", type=click.Path(), default=None,
               help="Also write a self-contained HTML dashboard of the report to this path.")
 def audit_cmd(
@@ -96,6 +102,9 @@ def audit_cmd(
     fail_on: str | None,
     signatures_path: str | None,
     suppressions_path: str | None,
+    policy_path: str | None,
+    employee: str | None,
+    agent: str | None,
     html_path: str | None,
 ) -> None:
     err = Console(stderr=True)
@@ -104,6 +113,9 @@ def audit_cmd(
             target,
             signatures_path=signatures_path,
             suppressions_path=suppressions_path,
+            policy_path=policy_path,
+            employee=employee,
+            agent=agent,
         )
     except FileNotFoundError as exc:
         err.print(f"[red]error:[/red] {exc}")
@@ -152,6 +164,10 @@ def audit_cmd(
               help="Path to a custom signatures.yaml (pins the rule version for both sides).")
 @click.option("--suppress", "suppressions_path", type=click.Path(exists=True), default=None,
               help="Auditor-side suppression file, applied to both sides.")
+@click.option("--policy", "policy_path", type=click.Path(exists=True), default=None,
+              help="Department privilege policy, applied to both sides.")
+@click.option("--employee", default=None, help="Employee identity from --policy.")
+@click.option("--agent", default=None, help="Main/helper agent identity from --policy.")
 def diff_cmd(
     old_target: str,
     new_target: str,
@@ -159,6 +175,9 @@ def diff_cmd(
     fail_on: str | None,
     signatures_path: str | None,
     suppressions_path: str | None,
+    policy_path: str | None,
+    employee: str | None,
+    agent: str | None,
 ) -> None:
     from .diffmode import diff_audits
     from .reporter import render_diff
@@ -170,6 +189,9 @@ def diff_cmd(
             new_target,
             signatures_path=signatures_path,
             suppressions_path=suppressions_path,
+            policy_path=policy_path,
+            employee=employee,
+            agent=agent,
         )
     except FileNotFoundError as exc:
         err.print(f"[red]error:[/red] {exc}")

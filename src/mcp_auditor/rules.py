@@ -16,6 +16,7 @@ from typing import Any, Iterable
 
 import yaml
 
+from .capabilities import DESTRUCTIVE_CAPABILITIES, MUTATING_CAPABILITIES
 from .types import Finding, Tool
 
 _DEFAULT_SIGNATURES = Path(__file__).with_name("signatures.yaml")
@@ -82,6 +83,12 @@ def run_rules(
             findings.extend(_de001(tool, rules["DE-001"]))
         if "DL-001" in rules:
             findings.extend(_dl001(tool, rules["DL-001"]))
+        if "CP-001" in rules:
+            findings.extend(_cp001(tool, rules["CP-001"]))
+        if "CP-002" in rules:
+            findings.extend(_cp002(tool, rules["CP-002"]))
+        if "CP-003" in rules:
+            findings.extend(_cp003(tool, rules["CP-003"]))
 
     # Server-level rules (need the whole tool set / a derived server name).
     if "NC-001" in rules:
@@ -261,6 +268,42 @@ def _op002(tool: Tool, rule: dict) -> list[Finding]:
 
 def _me001(rule: dict) -> list[Finding]:
     return [_make(rule, "ME-001", None, "no authentication signal detected")]
+
+
+def _capability_names(tool: Tool) -> set[str]:
+    return {item.capability for item in tool.capabilities}
+
+
+def _capability_evidence(tool: Tool, names: set[str]) -> str:
+    return "; ".join(
+        f"{item.capability}: {item.evidence}"
+        for item in tool.capabilities
+        if item.capability in names
+    )
+
+
+def _cp001(tool: Tool, rule: dict) -> list[Finding]:
+    """Declared read-only tool has statically visible mutating capabilities."""
+    if tool.annotations.get("readOnlyHint") is not True:
+        return []
+    conflicts = _capability_names(tool) & MUTATING_CAPABILITIES
+    return [_make(rule, "CP-001", tool, _capability_evidence(tool, conflicts))] if conflicts else []
+
+
+def _cp002(tool: Tool, rule: dict) -> list[Finding]:
+    """Declared non-destructive tool contains a destructive operation."""
+    if tool.annotations.get("destructiveHint") is not False:
+        return []
+    conflicts = _capability_names(tool) & DESTRUCTIVE_CAPABILITIES
+    return [_make(rule, "CP-002", tool, _capability_evidence(tool, conflicts))] if conflicts else []
+
+
+def _cp003(tool: Tool, rule: dict) -> list[Finding]:
+    """Declared closed-world tool performs an outbound network operation."""
+    if tool.annotations.get("openWorldHint") is not False:
+        return []
+    conflicts = _capability_names(tool) & {"network.outbound"}
+    return [_make(rule, "CP-003", tool, _capability_evidence(tool, conflicts))] if conflicts else []
 
 
 # --- v2 rules: research-seeded (MCP Threat Atlas) --------------------------

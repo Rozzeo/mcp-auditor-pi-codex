@@ -19,8 +19,8 @@ mcp-audit = "mcp_auditor.cli:main"
 mcp-audit-server = "mcp_auditor.mcp_server:main"
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0"]
-dev = ["pytest>=7.0", "mcp>=1.0"]
+mcp = ["mcp>=1.12.4,<1.13", "anyio>=4.5,<4.14"]
+dev = ["pytest>=7.0", "mcp>=1.12.4,<1.13", "anyio>=4.5,<4.14"]
 
 [build-system]
 requires = ["hatchling"]

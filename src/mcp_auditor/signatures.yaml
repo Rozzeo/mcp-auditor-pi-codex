@@ -8,8 +8,8 @@
 #
 # `version` is bumped (in lockstep with threats.yaml) whenever the set changes so
 # audits are reproducible against a known rule version (antivirus-style).
-version: 4
-released: "2026-07-07"
+version: 5
+released: "2026-08-04"
 
 rules:
   # --- Tool poisoning (MCP-T04) --------------------------------------------
@@ -331,6 +331,45 @@ rules:
       - "host\\s*=\\s*[\"']0\\.0\\.0\\.0[\"']"
       - "host\\s*=\\s*[\"']\\*[\"']"
       - "\\[::\\]"
+
+  # --- Declared vs observed capabilities (MCP-T17) -------------------------
+  # MCP ToolAnnotations are explicitly untrusted hints. These rules compare
+  # the hints with deterministic source observables from the registered handler.
+  CP-001:
+    confidence: high
+    category: capability_mismatch
+    severity: high
+    threat: MCP-T17
+    source: {ref: mcp-tool-annotations-spec, section: "ToolAnnotations"}
+    message: "Tool declares readOnlyHint=true but its implementation contains a mutating capability."
+    recommendation: "Correct the annotation and narrow the handler, then enforce the inferred capability through an auditor-side privilege policy."
+
+  CP-002:
+    confidence: high
+    category: capability_mismatch
+    severity: high
+    threat: MCP-T17
+    source: {ref: mcp-tool-annotations-spec, section: "ToolAnnotations"}
+    message: "Tool declares destructiveHint=false but its implementation contains a destructive operation."
+    recommendation: "Remove or explicitly gate the destructive operation and set destructiveHint truthfully; annotations are not a substitute for authorization."
+
+  CP-003:
+    confidence: high
+    category: capability_mismatch
+    severity: medium
+    threat: MCP-T17
+    source: {ref: mcp-tool-annotations-spec, section: "ToolAnnotations"}
+    message: "Tool declares openWorldHint=false but its implementation performs outbound network access."
+    recommendation: "Declare open-world interaction and restrict outbound destinations with an auditor-side allowlist."
+
+  PV-001:
+    confidence: high
+    category: policy_violation
+    severity: high
+    threat: MCP-T11
+    source: {ref: mcp-survey, section: "5.3.2"}
+    message: "Statically inferred tool capability is not permitted for the selected department, employee, and agent profile."
+    recommendation: "Narrow the MCP implementation or obtain an explicit reviewed policy grant at the narrowest applicable identity layer."
 
   # --- Tool chaining abuse (MCP-T12) ---------------------------------------
   TC-001:

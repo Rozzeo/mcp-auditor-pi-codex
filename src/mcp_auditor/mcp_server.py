@@ -13,11 +13,12 @@ Run directly:
     python -m mcp_auditor.mcp_server
 """
 
-from __future__ import annotations
-
 from typing import Any, Optional
 
 try:
+    # This surface intentionally targets the documented 1.12 API range pinned
+    # by the optional dependency. The auditor core itself has no MCP runtime
+    # dependency; this import exists only for the stdio wrapper.
     from mcp.server.fastmcp import FastMCP
 except ImportError as exc:  # pragma: no cover
     raise SystemExit(
@@ -45,6 +46,9 @@ def audit_mcp_server(
     target: str,
     signatures_path: Optional[str] = None,
     suppressions_path: Optional[str] = None,
+    policy_path: Optional[str] = None,
+    employee: Optional[str] = None,
+    agent: Optional[str] = None,
 ) -> dict[str, Any]:
     """Statically audit an MCP server and return the full AuditReport.
 
@@ -59,6 +63,10 @@ def audit_mcp_server(
             flagged suppressed=true with their justification, and are excluded
             from the score and summary. A suppression file found inside the
             target itself is never honored.
+        policy_path: Optional auditor-side department privilege policy.
+        employee: Employee identity in the policy; required unless agent selects it.
+        agent: Main/helper agent identity. Its grants can only narrow its parent
+            and employee privileges.
 
     Returns:
         The AuditReport as a JSON object: target, is_mcp_server, tools_analyzed,
@@ -70,6 +78,9 @@ def audit_mcp_server(
         target,
         signatures_path=signatures_path,
         suppressions_path=suppressions_path,
+        policy_path=policy_path,
+        employee=employee,
+        agent=agent,
     ).to_dict()
 
 
@@ -79,6 +90,9 @@ def diff_mcp_server_versions(
     new_target: str,
     signatures_path: Optional[str] = None,
     suppressions_path: Optional[str] = None,
+    policy_path: Optional[str] = None,
+    employee: Optional[str] = None,
+    agent: Optional[str] = None,
 ) -> dict[str, Any]:
     """Compare two audits of the same MCP server (the rug-pull detector).
 
@@ -91,6 +105,9 @@ def diff_mcp_server_versions(
         new_target: The newer version, same accepted forms.
         signatures_path: Optional pinned signatures.yaml applied to both sides.
         suppressions_path: Optional auditor-side suppression file, both sides.
+        policy_path: Optional department privilege policy, applied to both sides.
+        employee: Employee identity from the policy.
+        agent: Main/helper agent identity from the policy.
 
     Returns:
         Score delta, new_findings (each with severity and recommendation),
@@ -106,6 +123,9 @@ def diff_mcp_server_versions(
         new_target,
         signatures_path=signatures_path,
         suppressions_path=suppressions_path,
+        policy_path=policy_path,
+        employee=employee,
+        agent=agent,
     )
 
 
@@ -127,7 +147,7 @@ def list_rules(signatures_path: Optional[str] = None) -> dict[str, Any]:
             "category": rule.get("category"),
             "severity": rule.get("severity"),
             "message": rule.get("message"),
-            "threat_id": rule.get("threat_id"),
+            "threat_id": rule.get("threat"),
         }
         for rule_id, rule in sigs.get("rules", {}).items()
     ]

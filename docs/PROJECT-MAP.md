@@ -22,6 +22,8 @@ my/
 │   ├── fetcher.py            ←   GitHub по URL (один tarball-запрос; можно проверять чужие репо)
 │   ├── extractor.py          ← 2. Достаёт «анкеты» тулов из Python/TS/JSON:
 │   │                            имя, описание, параметры, тело — парсинг, не запуск
+│   ├── capabilities.py       ←   выводит read/write/delete/network/exec/db/secrets
+│   │                            из тела и сохраняет evidence + confidence
 │   │
 │   │   # 3. Мозг — детекция
 │   ├── signatures.yaml       ←   база знаний: паттерны всех правил (правится без кода)
@@ -30,6 +32,8 @@ my/
 │   ├── atlas.py              ←   привязка находок к Атласу (откуда знаем про атаку)
 │   ├── scorer.py             ← 4. Скор ПРОВЕРЯЕМОГО СЕРВЕРА: 100 − 40·critical − 20·high − 10·medium
 │   ├── suppressions.py       ←   подавление проверенных false positives (с обоснованием)
+│   ├── policy.py             ←   privilege list: отдел → роль → сотрудник → main/helper;
+│   │                            allow только сужается, deny всегда побеждает
 │   │
 │   │   # 5. Вывод
 │   ├── reporter.py           ←   терминал (rich)
@@ -46,7 +50,7 @@ my/
 │                                статьи ранжируются по уровню площадки (top / ranked /
 │                                preprint, CVE = advisory), фильтр: intel fetch --min-tier
 │
-├── tests/                    ← 157 тестов; fixtures/ — образцы серверов (чистый, заражённый…)
+├── tests/                    ← 185 тестов; fixtures/ — образцы серверов (чистый, заражённый…)
 ├── skills/ commands/ .claude-plugin/  ← интеграция с Claude Code (плагин, /audit-mcp, triage-скилл)
 ├── dist/                     ← сгенерированное: playground, примеры отчётов, wheel (в git не попадает)
 └── docs/, *.md               ← спека MVP, роадмап, README, эта карта

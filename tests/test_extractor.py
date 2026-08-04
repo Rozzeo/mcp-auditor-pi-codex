@@ -114,6 +114,33 @@ def test_plain_repo_is_not_mcp_server():
     assert result.tools == []
 
 
+def test_unrelated_python_tool_decorator_is_not_mcp():
+    source = "@app.tool()\ndef format_value(value: str):\n    return value\n"
+    result = extract({"app.py": source})
+    assert result.is_mcp_server is False
+    assert result.tools == []
+
+
+def test_unrelated_typescript_registration_names_are_not_mcp():
+    source = (
+        'server.registerTool("hammer", { description: "Workshop item" }, () => 1);\n'
+        'router.setRequestHandler("tools/list", handler);\n'
+    )
+    result = extract({"registry.ts": source})
+    assert result.is_mcp_server is False
+    assert result.tools == []
+
+
+def test_mcp_register_tool_allows_custom_server_variable_name():
+    source = (
+        'import { McpServer } from "@modelcontextprotocol/server";\n'
+        'const catalog = new McpServer({ name: "catalog", version: "1" });\n'
+        'catalog.registerTool("search", { description: "Search" }, async () => ({}));\n'
+    )
+    result = extract({"catalog.ts": source})
+    assert [tool.name for tool in result.tools] == ["search"]
+
+
 def test_malformed_python_does_not_crash():
     result = extract({"broken.py": "def (:::", "good.py": PY_FASTMCP})
     # Still finds the good server; broken file is skipped gracefully.
