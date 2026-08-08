@@ -431,10 +431,18 @@ rules:
     recommendation: "Use parameterized queries (placeholders + bound values). Never build SQL from tool inputs with f-strings, +, %, .format(), or template literals."
     # Scanned against statically-captured tool BODIES (never executed). Patterns
     # are kept JS-compatible so the playground can reuse them verbatim.
+    # Each quote style gets its own pattern on purpose. A shared [^"']* class
+    # stops at the first quote of EITHER kind, so the most common injection
+    # shape of all -- "... WHERE name = '" + value + "'" -- was silently missed,
+    # because interpolating a string value legitimately puts the other quote
+    # character inside the SQL literal. Only numeric interpolation was caught.
     sql_interp_patterns:
-      - "f[\"'](select|insert|update|delete|drop|alter|truncate)\\b[^\"']*\\{"
-      - "[\"'](select|insert|update|delete|drop|alter|truncate)\\b[^\"']*[\"']\\s*(\\+|%)\\s*\\w"
-      - "[\"'](select|insert|update|delete|drop|alter|truncate)\\b[^\"']*[\"']\\s*\\.\\s*format\\s*\\("
+      - "f\"(select|insert|update|delete|drop|alter|truncate)\\b[^\"]*\\{"
+      - "f'(select|insert|update|delete|drop|alter|truncate)\\b[^']*\\{"
+      - "\"(select|insert|update|delete|drop|alter|truncate)\\b[^\"]*\"\\s*(\\+|%)\\s*\\w"
+      - "'(select|insert|update|delete|drop|alter|truncate)\\b[^']*'\\s*(\\+|%)\\s*\\w"
+      - "\"(select|insert|update|delete|drop|alter|truncate)\\b[^\"]*\"\\s*\\.\\s*format\\s*\\("
+      - "'(select|insert|update|delete|drop|alter|truncate)\\b[^']*'\\s*\\.\\s*format\\s*\\("
       - "`\\s*(select|insert|update|delete|drop|alter|truncate)\\b[^`]*\\$\\{"
       - "(execute|executemany|\\.query)\\s*\\(\\s*f[\"']"
 
