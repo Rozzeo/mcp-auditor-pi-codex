@@ -21,7 +21,7 @@
 #   rules               signature rule ids that detect this ([] = known gap)
 #   sources             paper sections / CVEs that justify the entry
 # =============================================================================
-version: 6
+version: 7
 released: "2026-08-09"
 
 # Primary source seeded into this Atlas.
@@ -35,6 +35,10 @@ references:
     type: standard
     title: "Model Context Protocol specification — ToolAnnotations"
     url: "https://modelcontextprotocol.io/specification/2025-11-25/schema#toolannotations"
+  - key: mcp-spec-2026-07-28
+    type: standard
+    title: "Model Context Protocol specification 2026-07-28 — stateless requests, cache hints (SEP-2549), multi round-trip requests"
+    url: "https://blog.modelcontextprotocol.io/posts/2026-07-28/"
 
 threats:
   # --- Creation phase: malicious developer ---------------------------------
@@ -145,14 +149,21 @@ threats:
       - "no version pinning of the server or its dependencies"
       - "no signature/checksum verification of server code"
       - "(temporal) a previously-clean tool description gains poisoned content"
-    rules: ["RP-001"]
+      - "cacheable results published with a long TTL or a cross-context cache scope"
+    rules: ["RP-001", "SL-002"]
     mitigations:
       - "Version pinning and reproducible builds; cryptographic signature checks."
       - "Version-transparency + runtime monitoring for behavioral change."
       - "Diff successive audits of the same server over time."
+      # Revision 2026-07-28 gave servers a protocol-level knob over how long
+      # clients keep tool definitions (ttlMs) and who may share them
+      # (cacheScope) -- a definition approved at review time can outlive the
+      # review, so the freshness hints belong in the rug-pull threat model.
+      - "Keep tools/list cache TTL short and its scope private so an approved definition cannot stay trusted after it is swapped."
     sources:
       - {ref: mcp-survey, section: "5.1.5"}
       - {type: cve, id: "CVE-2025-54136", name: "MCPoison"}
+      - {ref: mcp-spec-2026-07-28, section: "SEP-2549 cache hints"}
 
   - id: MCP-T06
     name: "Cross-Server Shadowing"
@@ -321,12 +332,22 @@ threats:
     static_detectability: "partial"
     static_signals:
       - "tools defined but no authentication/authorization signal detectable"
-    rules: ["ME-001", "DL-001"]
+      - "authorization decided from client-supplied per-request metadata (_meta / requestState)"
+      - "multi-round-trip request state consumed without an integrity boundary"
+    rules: ["ME-001", "DL-001", "SL-001", "SL-003"]
     mitigations:
       - "Mandatory endpoint auth on every connection; secure token storage."
-      - "Token audience enforcement; periodic session rotation/invalidation."
+      - "Token audience enforcement."
+      # Revision 2026-07-28 removed the initialize/initialized handshake and the
+      # Mcp-Session-Id header, so there is no session left to rotate or
+      # invalidate -- the pre-2026-07-28 advice to do so is kept out on purpose.
+      # The equivalent control is now per-request: bind identity to the verified
+      # access token, and seal any state echoed back by the client.
+      - "Derive identity per request from the verified access token, never from client-supplied metadata."
+      - "Seal and verify client-echoed request state (RequestStateBoundary) in multi-round-trip flows."
     sources:
       - {ref: mcp-survey, section: "5.3.4"}
+      - {ref: mcp-spec-2026-07-28, section: "stateless requests"}
 
   # --- Maintenance phase: security flaws -----------------------------------
   - id: MCP-T14

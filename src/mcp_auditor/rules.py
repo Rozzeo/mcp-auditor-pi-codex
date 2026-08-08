@@ -91,6 +91,8 @@ def run_rules(
             findings.extend(_cp002(tool, rules["CP-002"]))
         if "CP-003" in rules:
             findings.extend(_cp003(tool, rules["CP-003"]))
+        if "SL-001" in rules:
+            findings.extend(_sl001(tool, rules["SL-001"]))
 
     # Server-level rules (need the whole tool set / a derived server name).
     if "NC-001" in rules:
@@ -107,6 +109,10 @@ def run_rules(
         findings.extend(_op003(files, has_auth_signal, rules["OP-003"]))
     if "RP-001" in rules:
         findings.extend(_rp001(files, rules["RP-001"]))
+    if "SL-002" in rules:
+        findings.extend(_sl002(files, rules["SL-002"]))
+    if "SL-003" in rules:
+        findings.extend(_sl003(files, rules["SL-003"]))
 
     # ME-001 is report-level: fires once if tools exist but no auth was detected.
     if tools and not has_auth_signal:
@@ -537,6 +543,72 @@ def _dl001(tool: Tool, rule: dict) -> list[Finding]:
     text = f"{tool.description} {_schema_text(tool.schema)} {getattr(tool, 'body', '') or ''}"
     hit = _first_match(rule.get("patterns", []), text)
     return [_make(rule, "DL-001", tool, f"sensitive data reference: {hit}")] if hit else []
+
+
+# --- v7 rules: stateless protocol, revision 2026-07-28 ----------------------
+# The initialize/initialized handshake and Mcp-Session-Id were removed, so a
+# server no longer learns anything once per session: client identity and
+# capabilities ride along on every individual request.
+
+
+def _sl001(tool: Tool, rule: dict) -> list[Finding]:
+    """Authorization decided from client-supplied per-request metadata (MCP-T13).
+
+    Fires on the co-occurrence of a `_meta` / `requestState` read with a
+    privilege-shaped key, so a body that merely logs request metadata stays
+    quiet. Scans the captured body text only; it is never executed.
+    """
+    body = getattr(tool, "body", "") or ""
+    if not body:
+        return []
+    hit = _first_match(rule.get("patterns", []), body)
+    return [_make(rule, "SL-001", tool, f"authorization from client metadata: {hit}")] if hit else []
+
+
+def _sl002(files: dict[str, str], rule: dict) -> list[Finding]:
+    """Cacheable results published with a cross-context ('public') cache scope."""
+    patterns = tuple(rule.get("patterns", []))
+    if not patterns:
+        return []
+    regex = _combined(patterns)
+    for path, text in files.items():
+        m = regex.search(text)
+        if m:
+            return [
+                _make(rule, "SL-002", None, m.group(0), location=f"{path}:{_line_of(text, m.start())}")
+            ]
+    return []
+
+
+def _sl003(files: dict[str, str], rule: dict) -> list[Finding]:
+    """Multi-round-trip state on the low-level Server with no integrity boundary.
+
+    Scoped to the low-level API on purpose: the high-level `MCPServer` appends
+    `RequestStateBoundary` to its middleware unconditionally, so a server built
+    on it is already sealed and firing there would be a pure false positive.
+    """
+    lowlevel = _any_file_match(files, rule.get("lowlevel_patterns", []))
+    if not lowlevel:
+        return []
+    mrtr = _any_file_match(files, rule.get("mrtr_patterns", []))
+    if not mrtr:
+        return []
+    if _any_file_match(files, rule.get("boundary_patterns", [])):
+        return []
+    path, hit = mrtr
+    return [_make(rule, "SL-003", None, f"multi-round-trip state '{hit}' with no RequestStateBoundary", location=path)]
+
+
+def _any_file_match(files: dict[str, str], patterns: list[str]):
+    """First (path, matched text) across the corpus, or None."""
+    if not patterns:
+        return None
+    regex = _combined(tuple(patterns))
+    for path, text in files.items():
+        m = regex.search(text)
+        if m:
+            return path, m.group(0)
+    return None
 
 
 # --- helpers for the v2 rules ----------------------------------------------

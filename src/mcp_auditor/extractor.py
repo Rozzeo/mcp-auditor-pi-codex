@@ -25,7 +25,12 @@ _SKILL_SCRIPT_EXT = (".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".bash", ".zsh"
 # --- MCP detection signals -------------------------------------------------
 
 _PY_MCP_IMPORT = re.compile(r"^\s*(from|import)\s+mcp(\.|\s|$)", re.MULTILINE)
-_PY_FASTMCP = re.compile(r"\bFastMCP\b")
+# FastMCP was renamed MCPServer in SDK 2.0 (protocol 2026-07-28), and the module
+# moved from mcp.server.fastmcp to mcp.server.mcpserver. Both names are kept: the
+# import regex above still covers new servers, but relying on it alone would make
+# an aliased or vendored SDK invisible -- and a scanner that misses a server
+# reports it as clean rather than as unscanned.
+_PY_FASTMCP = re.compile(r"\b(FastMCP|MCPServer)\b")
 _TS_MCP_IMPORT = re.compile(r"""@modelcontextprotocol/(?:sdk|server)""")
 _PY_EXT = (".py",)
 _TS_EXT = (".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx")
