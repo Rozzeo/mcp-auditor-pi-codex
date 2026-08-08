@@ -90,8 +90,9 @@ def _fetch_tarball(session, owner: str, repo: str, headers: dict[str, str]) -> d
             fh = tar.extractfile(member)
             if fh is None:
                 continue
-            text = fh.read().decode("utf-8", "replace")
-            total += len(text.encode("utf-8", "ignore"))
+            raw = fh.read()
+            total += len(raw)  # byte count already in hand; no need to re-encode
+            text = raw.decode("utf-8", "replace")
             if total > MAX_TOTAL_BYTES:
                 break
             files[path] = text
@@ -122,7 +123,8 @@ def _fetch_blobs(session, owner: str, repo: str, headers: dict[str, str]) -> dic
             continue
         if _is_skipped(path):
             continue
-        if entry.get("size", 0) > MAX_FILE_BYTES:
+        size = entry.get("size", 0)
+        if size > MAX_FILE_BYTES:
             continue
         if len(files) >= MAX_FILES or total > MAX_TOTAL_BYTES:
             break
@@ -136,7 +138,7 @@ def _fetch_blobs(session, owner: str, repo: str, headers: dict[str, str]) -> dic
         text = _decode_blob(blob.json())
         if text is None:
             continue
-        total += len(text.encode("utf-8", "ignore"))
+        total += size or len(text)  # the tree listing already reports byte size
         if total > MAX_TOTAL_BYTES:
             break
         files[path] = text

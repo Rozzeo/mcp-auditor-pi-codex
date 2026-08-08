@@ -34,7 +34,8 @@ def load_local(path: str) -> dict[str, str]:
         raise FileNotFoundError(f"Target path does not exist: {path}")
 
     if root.is_file():
-        return _read_one(root, root.name)
+        read = _read_one(root)
+        return {root.name: read[0]} if read else {}
 
     files: dict[str, str] = {}
     total = 0
@@ -44,24 +45,30 @@ def load_local(path: str) -> dict[str, str]:
             if not fname.lower().endswith(RELEVANT_EXT):
                 continue
             fpath = Path(dirpath) / fname
-            rel = str(fpath.relative_to(root))
-            chunk = _read_one(fpath, rel)
-            if not chunk:
+            read = _read_one(fpath)
+            if read is None:
                 continue
-            (key, content), = chunk.items()
-            total += len(content.encode("utf-8", "ignore"))
+            text, size = read
+            total += size
             if total > MAX_TOTAL_BYTES or len(files) >= MAX_FILES:
                 return files
-            files[key] = content
+            files[str(fpath.relative_to(root))] = text
     return files
 
 
-def _read_one(fpath: Path, rel: str) -> dict[str, str]:
+def _read_one(fpath: Path) -> tuple[str, int] | None:
+    """Return (text, byte size) for one file, or None if unreadable/oversized.
+
+    The size is taken from stat() rather than re-encoding the decoded text: the
+    total-bytes cap only needs a byte count, and encoding every file a second
+    time just to measure it copies the whole corpus for nothing.
+    """
     try:
-        if fpath.stat().st_size > MAX_FILE_BYTES:
-            return {}
+        size = fpath.stat().st_size
+        if size > MAX_FILE_BYTES:
+            return None
         # 'replace' guarantees we never raise on odd bytes; we only read text.
         text = fpath.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return {}
-    return {rel: text}
+        return None
+    return text, size

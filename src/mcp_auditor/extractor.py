@@ -81,17 +81,24 @@ _PY_TYPE_TO_JSON = {
 def _extract_python(path: str, text: str) -> tuple[bool, list[Tool]]:
     sdk = bool(_PY_MCP_IMPORT.search(text) or _PY_FASTMCP.search(text))
     tools: list[Tool] = []
+
+    # `@app.tool` is used by unrelated frameworks too. Without an MCP import or
+    # FastMCP symbol, treating every such decorator as MCP creates high-noise
+    # false positives in ordinary Python applications.
+    #
+    # This gate runs BEFORE ast.parse on purpose: parsing is the single most
+    # expensive step of an audit, and in a repo where one file is the MCP server
+    # every other Python file would otherwise be parsed only for the result to be
+    # discarded here. The regex above already decided the answer.
+    if not sdk:
+        return False, []
+
     try:
         tree = ast.parse(text)
     except SyntaxError:
         return sdk, tools
 
-    # `@app.tool` is used by unrelated frameworks too. Without an MCP import or
-    # FastMCP symbol, treating every such decorator as MCP creates high-noise
-    # false positives in ordinary Python applications.
-    if not sdk:
-        return False, []
-
+    lines = _source_lines(text)
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -102,7 +109,7 @@ def _extract_python(path: str, text: str) -> tuple[bool, list[Tool]]:
         schema = _schema_from_signature(node)
         # Capture the function source as TEXT (never executed) so code-level
         # rules like CI-001 can scan the body for dangerous sinks.
-        body = ast.get_source_segment(text, node) or ""
+        body = _source_segment(lines, node)
         tools.append(
             Tool(
                 name=name,
@@ -116,6 +123,52 @@ def _extract_python(path: str, text: str) -> tuple[bool, list[Tool]]:
     if tools:
         sdk = True
     return sdk, tools
+
+
+# Splits on \n, \r and \r\n only — matching how the Python parser counts lines.
+# Deliberately does NOT split on \f, \v or the Unicode line separators that
+# str.splitlines() also breaks on, since those would desynchronize the line
+# numbers the AST reports.
+_LINE_SPLIT = re.compile(r"[^\r\n]*(?:\r\n|[\r\n])")
+
+
+def _source_lines(text: str) -> list[str]:
+    lines = _LINE_SPLIT.findall(text)
+    consumed = sum(map(len, lines))
+    if consumed < len(text):
+        lines.append(text[consumed:])  # trailing line with no terminator
+    return lines
+
+
+def _byte_slice(line: str, start: int, end: int | None) -> str:
+    """AST columns are UTF-8 *byte* offsets, so a line containing non-ASCII must
+    be sliced as bytes. ASCII lines take the cheap path."""
+    if line.isascii():
+        return line[start:end]
+    return line.encode("utf-8")[start:end].decode("utf-8", "replace")
+
+
+def _source_segment(lines: list[str], node: ast.AST) -> str:
+    """`ast.get_source_segment` without re-splitting the file on every call.
+
+    The stdlib helper splits the entire source into lines each time it runs,
+    making body capture O(tools x file size) — a server with dozens of tools in
+    one module pays for that repeatedly. The line list is built once per file by
+    the caller and only sliced here.
+    """
+    end_lineno = getattr(node, "end_lineno", None)
+    end_col = getattr(node, "end_col_offset", None)
+    if end_lineno is None or end_col is None:
+        return ""
+    first, last = node.lineno - 1, end_lineno - 1
+    if first < 0 or last >= len(lines):
+        return ""
+    if first == last:
+        return _byte_slice(lines[first], node.col_offset, end_col)
+    segment = [_byte_slice(lines[first], node.col_offset, None)]
+    segment.extend(lines[first + 1:last])
+    segment.append(_byte_slice(lines[last], 0, end_col))
+    return "".join(segment)
 
 
 def _has_tool_decorator(node: ast.AST) -> bool:
