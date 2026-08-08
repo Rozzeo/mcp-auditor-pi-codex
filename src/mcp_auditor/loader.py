@@ -14,11 +14,15 @@ MAX_FILES = 2000
 MAX_FILE_BYTES = 1_000_000
 MAX_TOTAL_BYTES = 25_000_000
 
-# Only these extensions can carry MCP tool definitions; skip everything else.
+# Extensions that can carry MCP tool definitions or agent-skill instructions.
+# Markdown/shell are included so SKILL.md files and bundled install scripts are
+# audited (agent skills are the same trust surface as MCP tools).
 RELEVANT_EXT = (
     ".py",
     ".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx",
     ".json",
+    ".md", ".mdx",
+    ".sh", ".bash", ".zsh", ".ps1",
 )
 
 SKIP_DIRS = {

@@ -9,7 +9,9 @@ build/
 # Local workspace artifacts (not part of the project)
 .claude/
 .mcp.json
-SKILL.md
+# Anchored to the repo root on purpose: a bare `SKILL.md` matches at any depth
+# and would swallow the tests/fixtures/*-skill/SKILL.md audit fixtures.
+/SKILL.md
 Model Context Protocol (MCP)_*
 visual-plan.html
 

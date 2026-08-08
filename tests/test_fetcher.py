@@ -93,12 +93,14 @@ def test_fetch_github_uses_single_tarball_request():
     server_py = "from mcp.server.fastmcp import FastMCP\n"
     tar = _make_tarball({
         "server.py": server_py,
-        "README.md": "docs",
-        "node_modules/x.js": "skip me",
+        "README.md": "docs",           # markdown IS scanned now (SKILL.md, doc creds)
+        "logo.png": "binary-ish",       # non-code extension: skipped
+        "node_modules/x.js": "skip me",  # vendored dir: skipped
     })
     session = FakeSession({"/repos/owner/repo/tarball": FakeTarResponse(tar)})
     files = fetch_github("https://github.com/owner/repo", session=session)
-    assert files == {"server.py": server_py}
+    assert files == {"server.py": server_py, "README.md": "docs"}
+    assert "logo.png" not in files and "node_modules/x.js" not in files
     # The whole repo came down in exactly one HTTP request.
     assert session.requested == ["https://api.github.com/repos/owner/repo/tarball"]
 
