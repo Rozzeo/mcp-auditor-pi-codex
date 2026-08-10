@@ -1,0 +1,18 @@
+# Reviewed false positives for auditing this skill with mcp-audit itself.
+#
+#   mcp-audit skills/vetting-mcp-servers --suppress skills/vetting-mcp-servers/suppressions.yaml
+#
+# A document *about* credential theft and exfiltration necessarily contains the
+# vocabulary those rules match. Rewording the guidance to keep the scanner quiet
+# would make it worse guidance, so the findings are recorded here with a reason
+# instead — which is the workflow the skill itself documents.
+suppress:
+  - rule: TP-003
+    tool: vetting-mcp-servers
+    reason: "Security guidance naming what the rules detect (credentials, secrets); not instructions aimed at an agent."
+  # No `tool:` key — TC-001 is a server-level rule, so its findings carry no
+  # tool name and a tool-scoped entry would never match.
+  - rule: TC-001
+    reason: "Read + network vocabulary appears because the doc explains how those capabilities chain; the skill has no handler and performs no I/O."
+  - rule: ME-001
+    reason: "Informational: a skill document is not a network-exposed server, so there is no authentication surface to detect."
