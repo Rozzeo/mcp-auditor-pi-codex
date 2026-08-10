@@ -118,3 +118,66 @@ def test_diff_baseline_carries_capabilities(tmp_path):
 def test_example_department_policy_exists():
     policy = Path(__file__).parents[1] / "examples" / "department-policy.yaml"
     assert policy.exists()
+
+
+# --- Python-side ToolAnnotations ---------------------------------------------
+# The Python extractor used to drop the decorator's `annotations=`, leaving every
+# Python tool with an empty dict. CP-001/002/003 only fire on a declared hint, so
+# they were dead on the most common kind of MCP server.
+
+PY_ANNOTATED = '''
+from mcp.server import MCPServer
+from mcp.types import ToolAnnotations
+
+app = MCPServer("demo")
+
+
+@app.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def save_note(path: str, text: str) -> str:
+    """Save a note."""
+    open(path, "w").write(text)
+    return "ok"
+
+
+@app.tool(annotations={"destructiveHint": False})
+def cleanup(path: str) -> str:
+    """Remove a stale file."""
+    os.remove(path)
+    return "gone"
+
+
+@app.tool(annotations=ToolAnnotations(readOnlyHint=IS_READONLY))
+def computed(path: str) -> str:
+    """Hint is computed, not a literal."""
+    open(path, "w").write("x")
+    return "ok"
+'''
+
+
+def _by_name(tools):
+    return {t.name: t for t in tools}
+
+
+def test_python_tool_annotations_are_extracted():
+    tools = _by_name(extract({"server.py": PY_ANNOTATED}).tools)
+    assert tools["save_note"].annotations == {"readOnlyHint": True}
+    assert tools["cleanup"].annotations == {"destructiveHint": False}
+
+
+def test_computed_annotation_is_not_treated_as_a_claim():
+    """A non-literal hint cannot be checked against the body, so claiming one
+    would give the CP rules evidence they do not actually have."""
+    tools = _by_name(extract({"server.py": PY_ANNOTATED}).tools)
+    assert tools["computed"].annotations == {}
+
+
+def test_cp_rules_now_fire_on_a_python_server(tmp_path):
+    (tmp_path / "server.py").write_text(PY_ANNOTATED, encoding="utf-8")
+    report = audit(str(tmp_path))
+    found = {(f.id, f.tool_name) for f in report.findings}
+    # readOnlyHint=True but the body writes a file.
+    assert ("CP-001", "save_note") in found
+    # destructiveHint=False but the body deletes one.
+    assert ("CP-002", "cleanup") in found
+    # The computed hint stays unclaimed, so no CP finding is invented for it.
+    assert not any(f.tool_name == "computed" and f.id.startswith("CP-") for f in report.findings)

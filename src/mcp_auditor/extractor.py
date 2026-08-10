@@ -25,7 +25,12 @@ _SKILL_SCRIPT_EXT = (".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".bash", ".zsh"
 # --- MCP detection signals -------------------------------------------------
 
 _PY_MCP_IMPORT = re.compile(r"^\s*(from|import)\s+mcp(\.|\s|$)", re.MULTILINE)
-_PY_FASTMCP = re.compile(r"\bFastMCP\b")
+# FastMCP was renamed MCPServer in SDK 2.0 (protocol 2026-07-28), and the module
+# moved from mcp.server.fastmcp to mcp.server.mcpserver. Both names are kept: the
+# import regex above still covers new servers, but relying on it alone would make
+# an aliased or vendored SDK invisible -- and a scanner that misses a server
+# reports it as clean rather than as unscanned.
+_PY_FASTMCP = re.compile(r"\b(FastMCP|MCPServer)\b")
 _TS_MCP_IMPORT = re.compile(r"""@modelcontextprotocol/(?:sdk|server)""")
 _PY_EXT = (".py",)
 _TS_EXT = (".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx")
@@ -197,6 +202,7 @@ def _extract_python(path: str, text: str) -> tuple[bool, list[Tool]]:
                 schema=schema,
                 location=f"{path}:{node.lineno}",
                 body=body,
+                annotations=_annotations_from_decorator(node),
             )
         )
     # A file using a tool decorator implies the SDK even if the import is aliased.
@@ -272,6 +278,48 @@ def _tool_name_from_decorator(node: ast.AST):
             if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                 return arg.value
     return None
+
+
+# The four MCP ToolAnnotations behavioural hints. They are untrusted claims by
+# design — CP-001/002/003 exist to compare them against the observed handler.
+_ANNOTATION_HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
+
+
+def _annotations_from_decorator(node: ast.AST) -> dict:
+    """Read ToolAnnotations off an `@app.tool(...)` decorator.
+
+    Without this the Python path produced tools with empty `annotations`, so
+    CP-001/002/003 — which fire only on a declared hint — could never trigger on
+    a Python server, the most common kind. Both SDK-accepted shapes are read:
+    `annotations=ToolAnnotations(readOnlyHint=True)` and the plain
+    `annotations={"readOnlyHint": True}`.
+    """
+    for dec in getattr(node, "decorator_list", []):
+        if not isinstance(dec, ast.Call):
+            continue
+        for kw in dec.keywords:
+            if kw.arg == "annotations":
+                return _annotation_mapping(kw.value)
+    return {}
+
+
+def _annotation_mapping(value: ast.AST) -> dict:
+    """Only literal booleans count. A computed hint is not a claim we can check
+    statically, and guessing at one would weaken the CP rules' evidence."""
+    out: dict = {}
+    pairs: list[tuple] = []
+    if isinstance(value, ast.Call):  # ToolAnnotations(readOnlyHint=True)
+        pairs = [(kw.arg, kw.value) for kw in value.keywords]
+    elif isinstance(value, ast.Dict):  # {"readOnlyHint": True}
+        pairs = [
+            (key.value, val)
+            for key, val in zip(value.keys, value.values)
+            if isinstance(key, ast.Constant)
+        ]
+    for name, val in pairs:
+        if name in _ANNOTATION_HINTS and isinstance(val, ast.Constant) and isinstance(val.value, bool):
+            out[name] = val.value
+    return out
 
 
 def _schema_from_signature(node: ast.AST) -> dict:
