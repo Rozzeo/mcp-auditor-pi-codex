@@ -259,6 +259,58 @@ def update_cmd() -> None:
     raise SystemExit(0)
 
 
+@main.command(
+    name="installed",
+    help="List the MCP servers registered in this machine's client configs and flag risky launch specs.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the inventory as JSON on stdout (and nothing else).")
+@click.option("--fail-on", type=click.Choice(SEVERITY_ORDER, case_sensitive=False), default=None,
+              help="Exit non-zero if any finding at or above this severity exists (for CI gating).")
+def installed_cmd(as_json: bool, fail_on: str | None) -> None:
+    """Answer 'what is this agent already allowed to call?' before 'is that repo safe?'.
+
+    Configs are read as text and parsed as JSON. No server is launched and no
+    remote URL is contacted — discovery stays inside the same static-only
+    guarantee as an audit.
+    """
+    from .discovery import discover, to_tools
+    from .rules import load_signatures, run_rules
+    from .updater import effective_signatures_path
+
+    err = Console(stderr=True)
+    servers, texts = discover()
+    signatures = load_signatures(effective_signatures_path(None))
+    findings = run_rules(to_tools(servers), signatures, has_auth_signal=True, files=texts)
+    findings.sort(key=lambda f: (_SEVERITY_RANK.get(f.severity, 99), f.id, f.tool_name or ""))
+
+    if as_json:
+        click.echo(json.dumps(
+            {
+                "servers": [s.to_dict() for s in servers],
+                "configs_scanned": sorted(texts),
+                "findings": [f.to_dict() for f in findings],
+                "signature_version": signatures.get("version"),
+            },
+            indent=2,
+        ))
+    elif not servers:
+        err.print("[yellow]No MCP client configs with registered servers found.[/yellow]")
+    else:
+        table = Table(title=f"Registered MCP servers ({len(servers)})")
+        for column in ("Client", "Server", "Transport", "Launch / URL", "Env keys"):
+            table.add_column(column, overflow="fold")
+        for s in servers:
+            table.add_row(s.client, s.name, s.transport, s.launch or s.url, ", ".join(s.env_keys))
+        Console().print(table)
+        for f in findings:
+            if not f.suppressed:
+                Console().print(f"  [red]{f.severity:8}[/red] {f.id:8} {f.tool_name or '-':22} {f.evidence}")
+
+    if fail_on and _at_or_above(findings, fail_on.lower()):
+        raise SystemExit(1)
+    raise SystemExit(0)
+
+
 # --- intel group -----------------------------------------------------------
 
 

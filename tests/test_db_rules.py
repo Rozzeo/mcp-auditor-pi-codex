@@ -29,6 +29,27 @@ def test_sq001_flags_concatenated_sql():
     assert "SQ-001" in ids(run_one(t))
 
 
+def test_sq001_flags_string_valued_concatenation():
+    """The SQL literal carries the other quote character when a *string* value is
+    interpolated. A shared [^"']* class stopped there, so this — the most common
+    injection shape — used to slip through while numeric interpolation caught."""
+    t = Tool("find_user", "Find a user.", {}, "s.py:1",
+             body='''cur.execute("SELECT ssn FROM staff WHERE name = '" + name + "'")''')
+    assert "SQ-001" in ids(run_one(t))
+
+
+def test_sq001_flags_string_valued_fstring():
+    t = Tool("find_user", "Find a user.", {}, "s.py:1",
+             body='''cur.execute(f"SELECT ssn FROM staff WHERE name = '{name}'")''')
+    assert "SQ-001" in ids(run_one(t))
+
+
+def test_sq001_flags_single_quoted_sql_with_embedded_double_quote():
+    t = Tool("find_user", "Find a user.", {}, "s.py:1",
+             body="""cur.execute('SELECT ssn FROM staff WHERE dept = "' + dept + '"')""")
+    assert "SQ-001" in ids(run_one(t))
+
+
 def test_sq001_flags_js_template_literal_sql():
     t = Tool("find", "Find rows.", {}, "s.ts:1",
              body='const rows = await db.query(`SELECT * FROM orders WHERE id = ${id}`)')
