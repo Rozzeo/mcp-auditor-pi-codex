@@ -27,38 +27,42 @@ import yaml
 from .capabilities import DESTRUCTIVE_CAPABILITIES, MUTATING_CAPABILITIES
 from .types import Tool
 
-# The fixed core vocabulary. A connector-specific label (e.g. "Scheduling",
-# "Mailbox settings", "Write (destructive)") is expressed through an overrides
-# file rather than by growing this list, so matrices stay comparable.
-DISCOVERY, SEARCH, READ, WRITE, SEND, DELETE = (
-    "Discovery", "Search", "Read", "Write", "Send", "Delete",
-)
-CORE_TYPES = (DISCOVERY, SEARCH, READ, WRITE, SEND, DELETE)
+# The fixed core vocabulary: three labels, because that is the question a
+# review board actually answers — does this operation observe state, change it,
+# or destroy it. Delete is the destructive form of write and is split out only
+# because it is the one that cannot be undone by writing again.
+#
+# Finer distinctions a particular connector cares about ("Scheduling",
+# "Mailbox settings", "Search", "Discovery") go in an overrides file rather
+# than into this list, so matrices stay comparable between connectors.
+READ, WRITE, DELETE = "Read", "Write", "Delete"
+CORE_TYPES = (READ, WRITE, DELETE)
 
 # Verb families as WHOLE WORDS. Names arrive in three shapes -- `posts.list`,
 # `outlook_send_mail`, `wpcom-domain-update-dns-records` -- so classification
 # tokenizes the name and matches tokens exactly.
-# (`outlook_batch_delete_messages`, `wpcom-domain-update-dns-records`).
 #
 # Exact tokens, never prefixes: `^share` would classify every `sharepoint_*`
-# tool as Send, and `^mail` would do the same to `set-mail-service`. For the
+# tool as a send, and `^mail` would do the same to `set-mail-service`. For the
 # same reason "email"/"mail" are absent — in real tool names they are nouns
-# (`outlook_email_search` is a Search), and the verb form is already covered
-# by "send".
+# (`outlook_email_search` reads), and the verb form is already covered by "send".
+#
+# Sending is a write: it leaves the system changed and observable by someone
+# else. Searching and describing are reads: they return state without altering it.
 _VERB_TOKENS: tuple[tuple[str, frozenset], ...] = (
     (DELETE, frozenset({"delete", "remove", "destroy", "drop", "purge", "trash",
                         "erase", "revoke", "uninstall", "unpublish"})),
-    (SEND, frozenset({"send", "notify", "dispatch", "forward", "publish",
-                      "broadcast", "invite"})),
-    (WRITE, frozenset({"create", "update", "add", "set", "modify", "edit", "rename",
+    (WRITE, frozenset({"send", "notify", "dispatch", "forward", "publish",
+                       "broadcast", "invite",
+                       "create", "update", "add", "set", "modify", "edit", "rename",
                        "move", "copy", "upload", "patch", "put", "write", "change",
                        "activate", "deactivate", "launch", "restore", "purchase",
                        "register", "renew", "install", "enable",
                        "disable", "assign", "approve", "submit", "import", "sync",
                        "refresh", "reset", "untrash", "respond"})),
-    (SEARCH, frozenset({"search", "find", "query", "lookup"})),
-    (DISCOVERY, frozenset({"describe", "discover", "catalog", "schema", "capabilities"})),
-    (READ, frozenset({"list", "get", "read", "fetch", "view", "show", "status",
+    (READ, frozenset({"search", "find", "query", "lookup",
+                      "describe", "discover", "catalog", "schema", "capabilities",
+                      "list", "get", "read", "fetch", "view", "show", "status",
                       "preview", "download", "export", "check", "count", "resolve"})),
 )
 
@@ -175,19 +179,13 @@ def classify(tool_or_action, description: str = "", annotations: dict | None = N
             return hit, "overrides file"
 
     operation = _operation_of(action)
-    verb = _verb_of(operation)
-
-    # A facade's own bare `list` / `describe` enumerates the catalog rather than
-    # data — `posts.list` reads records, `facade -> list` reads the tool menu.
-    if "->" in action and verb.lower() in ("list", "describe") and "." not in operation:
-        return DISCOVERY, "facade catalog operation"
 
     if annotations.get("destructiveHint") is True:
         return DELETE, "destructiveHint: true"
 
-    # Tokens are scanned
-    # EARLIEST first because vendor names read <namespace>-<verb>-<object>:
-    # `set-mail-service` is a Write on the mail service, not a Send.
+    # Tokens are scanned EARLIEST first because vendor names read
+    # <namespace>-<verb>-<object>: `set-mail-service` is a write on the mail
+    # service, not a send of mail.
     for token in _tokens_of(operation):
         low_token = token.lower()
         for label, verbs in _VERB_TOKENS:
@@ -198,8 +196,6 @@ def classify(tool_or_action, description: str = "", annotations: dict | None = N
         return READ, "readOnlyHint: true"
     if caps & DESTRUCTIVE_CAPABILITIES:
         return DELETE, "destructive capability in body"
-    if "network.outbound" in caps and caps & MUTATING_CAPABILITIES:
-        return SEND, "outbound network capability in body"
     if caps & MUTATING_CAPABILITIES:
         return WRITE, "mutating capability in body"
     if caps:
@@ -208,13 +204,11 @@ def classify(tool_or_action, description: str = "", annotations: dict | None = N
 
 
 # Default recommendation per type. The reviewer overrides column E; this is a
-# starting position, not a verdict.
+# starting position, not a verdict. Delete defaults to refusal because it is
+# the operation that cannot be undone by issuing another one.
 _RECOMMENDS = {
-    DISCOVERY: "Approved",
-    SEARCH: "Approved",
     READ: "Approved",
     WRITE: "Approved (with confirmation)",
-    SEND: "Approved (with confirmation)",
     DELETE: "No",
 }
 

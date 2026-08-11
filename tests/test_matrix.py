@@ -11,7 +11,7 @@ import csv
 import pytest
 
 from mcp_auditor.matrix import (
-    DELETE, DISCOVERY, READ, SEARCH, SEND, WRITE,
+    DELETE, READ, WRITE,
     Overrides, build_matrix, classify, expand_facade, summarize, write_csv,
 )
 from mcp_auditor.types import Tool
@@ -27,8 +27,8 @@ def t(name):
 @pytest.mark.parametrize("name,expected", [
     ("posts.list", READ), ("posts.get", READ), ("posts.create", WRITE),
     ("posts.update", WRITE), ("posts.delete", DELETE),
-    ("content-search", SEARCH), ("newsletter.get_settings", READ),
-    ("manage-site.set-visibility", WRITE), ("outlook_send_mail", SEND),
+    ("content-search", READ), ("newsletter.get_settings", READ),
+    ("manage-site.set-visibility", WRITE), ("outlook_send_mail", WRITE),
     ("outlook_batch_delete_messages", DELETE), ("outlook_untrash_thread", WRITE),
     ("sharepoint_upload_file", WRITE), ("read_resource", READ),
 ])
@@ -39,10 +39,10 @@ def test_classifies_common_operation_names(name, expected):
 def test_noun_that_looks_like_a_verb_is_not_treated_as_one():
     """`sharepoint_*` must not read as the verb `share`, and `set-mail-service`
     must not read as `mail` — prefix matching got both wrong."""
-    assert t("sharepoint_search") == SEARCH
-    assert t("sharepoint_folder_search") == SEARCH
+    assert t("sharepoint_search") == READ
+    assert t("sharepoint_folder_search") == READ
     assert t("wpcom-domain-set-mail-service") == WRITE
-    assert t("outlook_email_search") == SEARCH
+    assert t("outlook_email_search") == READ
 
 
 def test_verb_is_found_mid_string_in_hyphenated_vendor_names():
@@ -51,10 +51,13 @@ def test_verb_is_found_mid_string_in_hyphenated_vendor_names():
     assert t("wpcom-domain-purchase") == WRITE
 
 
-def test_facade_catalog_operation_is_discovery_but_data_list_is_read():
-    assert t("wpcom-mcp-site -> list") == DISCOVERY
-    assert t("wpcom-mcp-site -> describe") == DISCOVERY
+def test_facade_operations_classify_on_the_operation_not_the_facade_name():
+    """Listing the catalog and listing records are both reads — the three-label
+    vocabulary deliberately does not separate discovery from data access."""
+    assert t("wpcom-mcp-site -> list") == READ
+    assert t("wpcom-mcp-site -> describe") == READ
     assert t("wpcom-mcp-content-authoring -> posts.list") == READ
+    assert t("wpcom-mcp-content-authoring -> posts.delete") == DELETE
 
 
 def test_declared_destructive_annotation_wins_over_the_name():
@@ -139,7 +142,7 @@ def test_no_prefill_leaves_the_human_columns_empty():
 
 
 def test_summary_counts_by_type():
-    assert summarize(build_matrix(_tools(), "Demo")) == {READ: 1, DELETE: 1, SEND: 1}
+    assert summarize(build_matrix(_tools(), "Demo")) == {READ: 1, DELETE: 1, WRITE: 1}
 
 
 def test_csv_export_has_the_expected_header_and_rows(tmp_path):
@@ -179,14 +182,14 @@ def test_xlsx_export_is_readable(tmp_path):
 # the core vocabulary. Connector-specific labels (Scheduling, Mailbox settings,
 # Write (destructive)) are excluded — those are the overrides file's job.
 GROUND_TRUTH = [
-    ("wpcom-mcp-site -> list", DISCOVERY), ("categories.get", READ),
+    ("wpcom-mcp-site -> list", READ), ("categories.get", READ),
     ("comments.list", READ), ("media.create", WRITE), ("tags.create", WRITE),
     ("settings.update", WRITE), ("categories.delete", DELETE),
-    ("media.delete", DELETE), ("content-search", SEARCH),
+    ("media.delete", DELETE), ("content-search", READ),
     ("account-protection.activate", WRITE), ("monitor.status", READ),
-    ("domains.set_primary", WRITE), ("outlook_calendar_search", SEARCH),
-    ("chat_message_search", SEARCH), ("outlook_forward_mail", SEND),
-    ("outlook_send_draft", SEND), ("outlook_create_reply_all_draft", WRITE),
+    ("domains.set_primary", WRITE), ("outlook_calendar_search", READ),
+    ("chat_message_search", READ), ("outlook_forward_mail", WRITE),
+    ("outlook_send_draft", WRITE), ("outlook_create_reply_all_draft", WRITE),
     ("outlook_delete_label", DELETE), ("sharepoint_move_item", WRITE),
     ("sharepoint_delete_item", DELETE), ("outlook_modify_thread_labels", WRITE),
     ("outlook_trash_thread", DELETE),

@@ -50,6 +50,8 @@ mcp-audit ./my-server --html report.html   # also write a shareable HTML dashboa
 mcp-audit playground                  # generate the interactive MCP Security Playground
 mcp-audit diff ./server-v1 ./server-v2     # what changed between two versions (rug pulls)
 mcp-audit ./my-server --policy examples/department-policy.yaml --agent alice-helper
+mcp-audit installed                   # what MCP servers this machine is already wired to
+mcp-audit matrix ./my-server --out matrix.xlsx   # per-operation table for InfoSec review
 ```
 
 - **Default (human):** colored terminal output — score, per-severity counts, and
@@ -60,6 +62,82 @@ mcp-audit ./my-server --policy examples/department-policy.yaml --agent alice-hel
   severity exists. Severities: `critical`, `high`, `medium`, `low`, `info`.
 
 For GitHub URLs, set `GITHUB_TOKEN` to raise the API rate limit (optional).
+
+## Connector approval matrix — `mcp-audit matrix`
+
+An audit answers *"is this server dangerous?"*. A review board asks something
+else: enumerate every operation the connector exposes, say what kind of access
+each one is, and approve them **individually**. That is what `matrix` produces —
+the spreadsheet security teams were building by hand.
+
+```bash
+mcp-audit matrix ./my-server        --connector "My MCP"    --out matrix.xlsx
+mcp-audit matrix tools.json         --connector "Google MCP" --out matrix.xlsx
+mcp-audit matrix https://github.com/owner/repo --format csv --out matrix.csv
+```
+
+### Where the operations come from
+
+Anything the extractor already reads: a **saved `tools/list` response**, a JSON
+manifest, a local path, or a GitHub URL.
+
+```json
+{"tools": [
+  {"name": "posts.list",   "description": "List posts."},
+  {"name": "posts.delete", "description": "Move a post to trash."}
+]}
+```
+
+The connector is never started. A **hosted** server with no public source has to
+have its tool list supplied as JSON — the command says so rather than silently
+emitting an empty matrix. Facade tools that hide many operations behind one MCP
+tool expand to one row each, but only from a literal `enum` in the schema:
+inventing operations a schema does not list would put unverifiable rows in front
+of a review board.
+
+### The three labels
+
+| type | meaning | default recommendation |
+|---|---|---|
+| `Read` | observes state and returns it — includes search and catalog/describe calls | Approved |
+| `Write` | changes state — includes sending, which leaves the change visible to someone else | Approved (with confirmation) |
+| `Delete` | destructive write: the one form that cannot be undone by writing again | No |
+
+Three labels because that is the question actually being answered. Finer
+distinctions a given connector cares about — `Scheduling`, `Mailbox settings`,
+`Write (destructive)` — come from an overrides file (see
+`examples/connector-types.yaml`), so matrices stay comparable between connectors:
+
+```bash
+mcp-audit matrix tools.json --types examples/connector-types.yaml --out matrix.xlsx
+```
+
+An override label is **cosmetic**. The prefilled recommendation still follows the
+core type, so relabelling a write cannot quietly turn it into a plain "Approved".
+
+### Columns
+
+| columns | who owns them |
+|---|---|
+| connector, action, type, description | **generated** — regenerate, don't hand-edit |
+| AI team recomends, InfoSec status | seeded with a default, meant to be overridden |
+| Comments | left for the reviewer |
+| platform | optional, added by `--platform "Claude, Base44"` |
+
+`--no-prefill` leaves the two judgment columns empty. `--status` sets the InfoSec
+column's constant (default `Pending InfoSec review`).
+
+Output is a single flat `.xlsx` sheet — amber for writes, red for destructive —
+or CSV. **`.xlsx` needs `openpyxl`**: `pip install 'mcp-auditor[xlsx]'`. CSV has
+no extra dependency.
+
+### Accuracy
+
+The classifier is measured against hand-labelled review matrices rather than
+asserted: **78/83 (94%)** on a WordPress.com MCP matrix and **30/30 (100%)** on a
+Google/Microsoft 365 one. The remaining disagreements are the `Write (destructive)`
+escalation (an overrides-file judgment) and one row where the spreadsheet labels a
+domain *purchase* as a search.
 
 ## Department and main/helper privilege policies
 
