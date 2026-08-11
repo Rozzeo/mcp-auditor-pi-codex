@@ -93,6 +93,8 @@ def run_rules(
             findings.extend(_cp003(tool, rules["CP-003"]))
         if "SL-001" in rules:
             findings.extend(_sl001(tool, rules["SL-001"]))
+        if "AT-001" in rules:
+            findings.extend(_at001(tool, rules["AT-001"]))
 
     # Server-level rules (need the whole tool set / a derived server name).
     if "NC-001" in rules:
@@ -609,6 +611,48 @@ def _any_file_match(files: dict[str, str], patterns: list[str]):
         if m:
             return path, m.group(0)
     return None
+
+
+def _at001(tool: Tool, rule: dict) -> list[Finding]:
+    """Confused deputy / token relay (MCP-T13): an inbound caller token is
+    forwarded to a downstream call without scope/audience narrowing.
+
+    Deliberately narrow to keep false positives near zero вЂ” a genuine relay is
+    rare in a well-built server. Requires, in the statically-captured body only
+    (never executed): (1) an inbound token вЂ” a token-named schema parameter or a
+    read of the caller's Authorization header; (2) that token placed into an
+    OUTBOUND request's auth header beside a real send call; and (3) NO
+    token-exchange / audience / scope-narrowing signal. A tool that authenticates
+    downstream with its own service credential has no inbound token and stays quiet.
+    """
+    body = getattr(tool, "body", "") or ""
+    if not body:
+        return []
+
+    # (3) A proper exchange / audience / scope check means this is not a confused
+    # deputy вЂ” bail before any relay matching so mitigated tools stay silent.
+    if _first_match(rule.get("scoping_patterns", []), body):
+        return []
+
+    # (1) Inbound token: a token-named parameter, or the body reads an auth header.
+    schema = tool.schema if isinstance(tool.schema, dict) else {}
+    props = schema.get("properties")
+    props = props if isinstance(props, dict) else {}
+    inbound_params = {p.lower() for p in rule.get("inbound_token_params", [])}
+    has_token_param = any(p.lower() in inbound_params for p in props)
+    has_header_read = bool(_first_match(rule.get("inbound_header_patterns", []), body))
+    if not (has_token_param or has_header_read):
+        return []
+
+    # (2) Outbound relay: the token goes into an auth header AND a send call exists.
+    relay = _first_match(rule.get("relay_patterns", []), body)
+    if not relay:
+        return []
+    if not _first_match(rule.get("send_patterns", []), body):
+        return []
+
+    source = "token parameter" if has_token_param else "inbound Authorization header"
+    return [_make(rule, "AT-001", tool, f"{source} forwarded downstream: {relay.strip()}")]
 
 
 # --- helpers for the v2 rules ----------------------------------------------

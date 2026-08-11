@@ -21,8 +21,8 @@
 #   rules               signature rule ids that detect this ([] = known gap)
 #   sources             paper sections / CVEs that justify the entry
 # =============================================================================
-version: 7
-released: "2026-08-09"
+version: 8
+released: "2026-08-11"
 
 # Primary source seeded into this Atlas.
 references:
@@ -334,7 +334,7 @@ threats:
       - "tools defined but no authentication/authorization signal detectable"
       - "authorization decided from client-supplied per-request metadata (_meta / requestState)"
       - "multi-round-trip request state consumed without an integrity boundary"
-    rules: ["ME-001", "DL-001", "SL-001", "SL-003"]
+    rules: ["ME-001", "DL-001", "SL-001", "SL-003", "AT-001"]
     mitigations:
       - "Mandatory endpoint auth on every connection; secure token storage."
       - "Token audience enforcement."

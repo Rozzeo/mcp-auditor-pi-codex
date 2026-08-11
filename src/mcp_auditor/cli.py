@@ -487,9 +487,9 @@ def intel_review(queue_path: str | None) -> None:
         tier = c.tier or "preprint"
         table.add_row(
             f"[{_TIER_STYLE.get(tier, '')}]{tier}[/]",
-            c.venue or "—",
+            c.venue or "вЂ”",
             c.source,
-            c.ident or "—",
+            c.ident or "вЂ”",
             c.title,
             ", ".join(c.matched[:3]),
         )
@@ -498,10 +498,83 @@ def intel_review(queue_path: str | None) -> None:
     raise SystemExit(0)
 
 
+@intel_group.command(
+    name="curate",
+    help="Fast, LLM-free interactive curation: review one queued candidate at a "
+         "time, type a name, hit y вЂ” it's merged into threats.yaml immediately. "
+         "No API key needed; use this while --use-llm isn't worth the cost.",
+)
+@click.option("--queue", "queue_path", default=None, help="Review-queue JSONL path.")
+@click.option("--atlas", "atlas_path", type=click.Path(exists=True), default=None,
+              help="threats.yaml to merge into (default: the bundled one).")
+@click.option("--limit", type=int, default=None, help="Stop after reviewing this many candidates.")
+def intel_curate(queue_path: str | None, atlas_path: str | None, limit: int | None) -> None:
+    from .intel import queue as q
+    from .intel.autodraft import build_human_draft, merge_into_atlas
+    from .intel.model import TIER_ORDER
+
+    console = Console()
+    path = queue_path or _default_queue_path()
+    items = q.load_queue(path)
+    if not items:
+        console.print("[dim]Review queue is empty. Run `mcp-audit intel fetch` first.[/dim]")
+        raise SystemExit(0)
+    items.sort(key=lambda c: (TIER_ORDER.get(c.tier, 9), c.published), reverse=False)
+
+    decided: set[str] = set()
+    drafts: list[dict] = []
+    reviewed = 0
+    try:
+        for cand in items:
+            if limit and reviewed >= limit:
+                break
+            reviewed += 1
+            console.rule(f"[{cand.tier or 'preprint'}] {cand.source} В· {cand.venue or 'вЂ”'}")
+            console.print(f"[bold]{cand.title}[/bold]")
+            if cand.url:
+                console.print(f"[dim]{cand.url}[/dim]")
+            if cand.summary:
+                console.print(cand.summary[:400])
+            if cand.matched:
+                console.print(f"[dim]matched: {', '.join(cand.matched)}[/dim]")
+
+            if not click.confirm("Add to Atlas?", default=False):
+                decided.add(cand.ident)
+                continue
+            decided.add(cand.ident)
+
+            name = click.prompt("Threat name", default=cand.title)
+            lifecycle = click.prompt(
+                "Lifecycle phase (creation/deployment/operation/maintenance)",
+                default="operation",
+            )
+            signal = click.prompt("One-line static signal (Enter to skip)", default="", show_default=False)
+            drafts.append(build_human_draft(cand, name=name, lifecycle=lifecycle, static_signal=signal))
+    except click.Abort:
+        console.print("\n[dim]Stopped early.[/dim]")
+
+    # Decided candidates (approved or explicitly skipped) leave the queue;
+    # anything not reached this run stays for next time.
+    remaining = [c for c in items if c.ident not in decided]
+    q.save_queue(path, remaining)
+
+    if drafts:
+        n = merge_into_atlas(drafts, atlas_path=atlas_path)
+        console.print(f"[green]{n} entrie(s) merged[/green] into {atlas_path or 'src/mcp_auditor/threats.yaml'}.")
+    else:
+        console.print("[dim]Nothing merged.[/dim]")
+    console.print(f"[dim]{len(remaining)} candidate(s) left in the queue.[/dim]")
+    raise SystemExit(0)
+
+
 @intel_group.command(name="distill", help="Draft candidate detection patterns from queued abstracts (optional --use-llm).")
 @click.option("--queue", "queue_path", default=None, help="Review-queue JSONL path.")
 @click.option("--use-llm", is_flag=True, help="Enable LLM drafting (OFF by default; sees abstracts only).")
-def intel_distill(queue_path: str | None, use_llm: bool) -> None:
+@click.option("--provider", type=click.Choice(["gemini", "anthropic"], case_sensitive=False), default=None,
+              help="LLM provider (default: auto-detect from GEMINI_API_KEY/GOOGLE_API_KEY/ANTHROPIC_API_KEY; "
+                   "Gemini wins if both are set вЂ” it has the more generous free tier).")
+@click.option("--model", default=None, help="Override the provider's default model.")
+def intel_distill(queue_path: str | None, use_llm: bool, provider: str | None, model: str | None) -> None:
     from .intel import distill as d
     from .intel import queue as q
 
@@ -512,9 +585,101 @@ def intel_distill(queue_path: str | None, use_llm: bool) -> None:
         raise SystemExit(0)
     cache = str(_intel_dir() / "distill-cache")
     for c in items:
-        result = d.distill(c, use_llm=use_llm, cache_dir=cache)
+        result = d.distill(c, use_llm=use_llm, cache_dir=cache, provider=provider, model=model)
         console.print(f"[bold]{c.ident or c.source}[/bold]  {c.title}")
         console.print_json(data=result)
+    raise SystemExit(0)
+
+
+@intel_group.command(
+    name="autodraft",
+    help="Auto-draft AND merge Atlas entries from high-tier queued candidates via LLM. "
+         "The included/excluded criteria (tier, dedup, keyword match, "
+         "'the LLM found something statically detectable') ARE the review вЂ” "
+         "no human copy/paste step. Entries land in threats.yaml with rules: [] "
+         "(no executable matcher yet; that part still needs a human, see --help).",
+)
+@click.option("--queue", "queue_path", default=None, help="Review-queue JSONL path.")
+@click.option("--atlas", "atlas_path", type=click.Path(exists=True), default=None,
+              help="threats.yaml to merge into (default: the bundled one).")
+@click.option("--log", "log_path", default=None,
+              help="Audit-trail log of merged entries (default: ~/.mcp-audit/intel/drafts/threats.draft.yaml).")
+@click.option(
+    "--min-tier",
+    type=click.Choice(["advisory", "top", "ranked"], case_sensitive=False),
+    default="ranked",
+    show_default=True,
+    help="Quality floor for auto-merging. 'community' (blogs/HN) and 'preprint' "
+         "(unreviewed arXiv) are ALWAYS excluded, regardless of this flag вЂ” those "
+         "stay in `mcp-audit intel review` for a human to triage; everything else "
+         "is trusted unattended. See intel/autodraft.py for the full criteria.",
+)
+@click.option("--use-llm", is_flag=True,
+              help="Enable LLM drafting (OFF by default; without it every candidate "
+                   "is excluded as llm_disabled вЂ” nothing is invented or merged for free).")
+@click.option("--provider", type=click.Choice(["gemini", "anthropic"], case_sensitive=False), default=None,
+              help="LLM provider (default: auto-detect from GEMINI_API_KEY/GOOGLE_API_KEY/ANTHROPIC_API_KEY; "
+                   "Gemini wins if both are set вЂ” it has the more generous free tier).")
+@click.option("--model", default=None, help="Override the provider's default model.")
+@click.option("--dry-run", is_flag=True,
+              help="Show what would be merged without touching threats.yaml.")
+def intel_autodraft(
+    queue_path: str | None,
+    atlas_path: str | None,
+    log_path: str | None,
+    min_tier: str,
+    use_llm: bool,
+    provider: str | None,
+    model: str | None,
+    dry_run: bool,
+) -> None:
+    from .atlas import load_atlas
+    from .intel import queue as q
+    from .intel.autodraft import autodraft, merge_into_atlas, write_drafts
+
+    console = Console()
+    err = Console(stderr=True)
+    items = q.load_queue(queue_path or _default_queue_path())
+    if not items:
+        console.print("[dim]Review queue is empty. Run `mcp-audit intel fetch` first.[/dim]")
+        raise SystemExit(0)
+
+    cache = str(_intel_dir() / "distill-cache")
+    atlas = load_atlas(atlas_path) if atlas_path else None
+    result = autodraft(
+        items, min_tier=min_tier.lower(), use_llm=use_llm, cache_dir=cache, atlas=atlas,
+        provider=provider, model=model,
+    )
+
+    table = Table(show_lines=True, title="Auto-draft results")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Ident", no_wrap=True)
+    table.add_column("Title")
+    table.add_column("Reason / draft name")
+    for d in result.included:
+        table.add_row("[green]merged[/green]" if not dry_run else "[cyan]would merge[/cyan]",
+                       d["source"]["ident"], d["source"]["title"], d["name"])
+    for e in result.excluded:
+        table.add_row("[yellow]excluded[/yellow]", e["ident"], e["title"], e["reason"])
+    console.print(table)
+
+    if not result.included:
+        err.print("[dim]No candidates passed the auto-merge criteria this run.[/dim]")
+        raise SystemExit(0)
+
+    log = log_path or str(_intel_dir() / "drafts" / "threats.draft.yaml")
+    write_drafts(log, result.included)
+
+    if dry_run:
+        err.print(f"[cyan]--dry-run:[/cyan] {len(result.included)} entrie(s) would be merged; nothing written.")
+        raise SystemExit(0)
+
+    n = merge_into_atlas(result.included, atlas_path=atlas_path)
+    err.print(
+        f"[green]{n} entrie(s) merged[/green] -> {atlas_path or 'src/mcp_auditor/threats.yaml'} "
+        f"(needs_review: true, rules: [] вЂ” a human still has to write the detector). "
+        f"Audit trail -> {log}."
+    )
     raise SystemExit(0)
 
 

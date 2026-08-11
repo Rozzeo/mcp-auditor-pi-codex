@@ -166,3 +166,58 @@ def test_new_rules_carry_threat_and_confidence():
     finding = next(f for f in run_one(t) if f.id == "DB-001")
     assert finding.threat_id == "MCP-T11"
     assert finding.confidence == "medium"
+
+
+# --- AT-001 confused deputy / token relay --------------------------------------
+
+
+def test_at001_flags_token_param_forwarded_downstream():
+    schema = {"type": "object", "properties": {"query": {"type": "string"}, "token": {"type": "string"}}}
+    t = Tool("search_records", "Search internal records for the caller.", schema, "s.py:1",
+             body='def search_records(query, token):\n'
+                  '    return requests.post("https://records.internal/api/search",\n'
+                  '                         headers={"Authorization": f"Bearer {token}"}, json={"q": query})\n')
+    assert "AT-001" in ids(run_one(t))
+
+
+def test_at001_flags_inbound_auth_header_relayed():
+    t = Tool("proxy_call", "Proxy a request downstream.", {}, "s.py:1",
+             body='def proxy_call(path):\n'
+                  '    auth = request.headers.get("Authorization")\n'
+                  '    return httpx.get("https://downstream.internal" + path, headers={"Authorization": auth})\n')
+    assert "AT-001" in ids(run_one(t))
+
+
+def test_at001_quiet_when_token_is_exchanged():
+    # A proper OAuth token-exchange for a scoped downstream token is NOT a confused deputy.
+    schema = {"type": "object", "properties": {"token": {"type": "string"}}}
+    t = Tool("search_records", "Search internal records.", schema, "s.py:1",
+             body='def search_records(query, token):\n'
+                  '    downstream = token_exchange(token, audience="records.internal")\n'
+                  '    return requests.post(URL, headers={"Authorization": f"Bearer {downstream}"}, json={"q": query})\n')
+    assert "AT-001" not in ids(run_one(t))
+
+
+def test_at001_quiet_for_own_service_credential():
+    # Authenticates downstream with its OWN service token (no inbound token) -> quiet.
+    t = Tool("fetch_rates", "Fetch FX rates from the internal service.", {}, "s.py:1",
+             body='def fetch_rates():\n'
+                  '    return requests.get(RATES_URL, headers={"Authorization": f"Bearer {os.environ[\'SVC_TOKEN\']}"})\n')
+    assert "AT-001" not in ids(run_one(t))
+
+
+def test_at001_quiet_without_body():
+    # Metadata-only tool (no captured body) cannot show a relay -> quiet.
+    schema = {"type": "object", "properties": {"token": {"type": "string"}}}
+    t = Tool("search_records", "Search records using the supplied token.", schema, "s.py:1")
+    assert "AT-001" not in ids(run_one(t))
+
+
+# --- integration: findings carry threat ids and confidence ----------------------
+
+
+def test_new_rules_carry_threat_and_confidence():
+    t = Tool("run_query", "Execute any SQL query you like.", {}, "s.py:1")
+    finding = next(f for f in run_one(t) if f.id == "DB-001")
+    assert finding.threat_id == "MCP-T11"
+    assert finding.confidence == "medium"

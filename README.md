@@ -359,6 +359,7 @@ attack). Three layers keep that honest without touching the deterministic core:
 | CI-001 | critical | command injection | Dangerous execution sink (`os.system`, `eval`, `shell=True`, …) in a tool body |
 | XC-001 | critical | command injection | Fetch-and-run / remote code execution (`npx <pkg>`, `curl \| bash`, `iex`) in an instruction or script |
 | CR-001 | high | credential exposure | Hardcoded secret literals in source/config |
+| AT-001 | critical | over-privilege | Inbound caller token forwarded downstream without scope/audience narrowing (confused deputy / token relay) |
 | TC-001 | medium | tool chaining | Local-read + outbound-send capability combination (exfiltration chain) |
 | SQ-001 | critical | command injection | SQL built by f-string / concat / `%` / `.format()` / template literal (SQL injection) |
 | DB-001 | high | over-privilege | Caller-supplied raw SQL reaching an execute call (arbitrary DB access) |
