@@ -21,6 +21,7 @@ Not for: writing a server (ordinary development), or deciding whether one alread
 | Is this server safe? | `mcp-audit <path-or-github-url> --json` |
 | Did it change since approval? | `mcp-audit diff <old-report.json> <new-target>` |
 | May *this person* run it? | `mcp-audit <target> --policy dept.yaml --employee alice` |
+| Need a per-operation review table? | `mcp-audit matrix <target> --connector "<name>" --out matrix.xlsx` |
 | What does a rule/threat mean? | `list_rules`, `explain_threat` (plugin MCP tools) |
 | Gate a pipeline | `--fail-on high` (exit 1 at or above that severity) |
 
@@ -33,6 +34,25 @@ A verdict has these parts, in this order:
 3. **Rank by confidence, then severity.**
 4. **Apply policy** when one exists. `--policy` with `--employee` / `--agent` answers "may this identity hold these privileges" — a different question from "is this code dangerous".
 5. **State a verdict** — allow / allow-with-suppressions / deny, naming the finding ids that drove it and the capabilities the server gains.
+
+When the decision goes to a review board rather than stopping with you, the
+verdict is a table, not a paragraph: `mcp-audit matrix` emits one row per
+operation with its access type, so each one is approved or refused
+individually instead of the connector being waved through as a whole.
+
+**When there is no source to read** — a hosted connector, or one written in a
+language the extractor does not parse — build the tool list yourself and hand
+it to the CLI:
+
+1. Read the connector's `tools/list` response, or its documentation page.
+2. Write `{"tools": [{"name": …, "description": …}, …]}` to a file.
+3. `mcp-audit matrix tools.json --connector "<name>" --out matrix.xlsx`
+
+Doing the reading step yourself is the point: the CLI is deterministic and
+makes no model calls, so its half of the output stays reproducible. Check the
+list you extracted against the source before the matrix goes to review — a docs
+page can lag the deployed server, and a row you missed is a tool nobody
+reviewed. Say which source you used and when it was published.
 
 ## Severity is impact; confidence is how sure the pattern is
 

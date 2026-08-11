@@ -20,7 +20,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from .core import audit
+from .core import audit, audit_detailed
 from .reporter import render_human
 from .types import SEVERITY_ORDER
 
@@ -308,6 +308,77 @@ def installed_cmd(as_json: bool, fail_on: str | None) -> None:
 
     if fail_on and _at_or_above(findings, fail_on.lower()):
         raise SystemExit(1)
+    raise SystemExit(0)
+
+
+@main.command(
+    name="matrix",
+    help="Build a connector approval matrix (one row per operation) for InfoSec review.",
+)
+@click.argument("target")
+@click.option("--out", "out_path", default="connectors_matrix.xlsx", show_default=True,
+              help="Output file. Extension picks the format unless --format is given.")
+@click.option("--format", "fmt", type=click.Choice(["xlsx", "csv"], case_sensitive=False),
+              default=None, help="Override the format inferred from --out.")
+@click.option("--connector", default=None,
+              help="Connector name for column A (default: the target's basename).")
+@click.option("--platform", default="",
+              help="Adds a platform column naming the client(s) this is opened to.")
+@click.option("--status", default="Pending InfoSec review", show_default=True,
+              help="Constant for the InfoSec status column.")
+@click.option("--types", "types_path", type=click.Path(exists=True), default=None,
+              help="YAML overrides mapping actions to connector-specific type labels.")
+@click.option("--no-prefill", is_flag=True,
+              help="Leave the recommendation and status columns empty for a human to fill.")
+def matrix_cmd(target: str, out_path: str, fmt: str | None, connector: str | None,
+               platform: str, status: str, types_path: str | None, no_prefill: bool) -> None:
+    """Enumerate a connector's operations and classify each one.
+
+    Operations come from whatever the extractor can already read — a saved
+    `tools/list` response, a JSON manifest, or a server's source. The connector
+    is never started, so a hosted server needs its tool list supplied as JSON.
+    """
+    from .matrix import Overrides, build_matrix, summarize, write_csv, write_xlsx
+
+    err = Console(stderr=True)
+    try:
+        report, tools = audit_detailed(target)
+    except FileNotFoundError as exc:
+        err.print(f"[red]error:[/red] {exc}")
+        raise SystemExit(2)
+    except Exception as exc:
+        err.print(f"[red]error:[/red] {exc}")
+        raise SystemExit(2)
+
+    if not tools:
+        err.print(
+            "[yellow]No operations found.[/yellow] For a hosted connector with no source, "
+            "save its tools/list response as JSON and pass that file instead."
+        )
+        raise SystemExit(2)
+
+    name = connector or Path(target).name or target
+    rows = build_matrix(tools, name, status=status, platform=platform,
+                        overrides=Overrides.load(types_path), prefill=not no_prefill)
+
+    chosen = (fmt or Path(out_path).suffix.lstrip(".") or "xlsx").lower()
+    try:
+        if chosen == "csv":
+            write_csv(rows, out_path, platform=bool(platform))
+        else:
+            write_xlsx(rows, out_path, platform=bool(platform))
+    except RuntimeError as exc:
+        err.print(f"[red]error:[/red] {exc}")
+        raise SystemExit(2)
+
+    table = Table(title=f"{name} — {len(rows)} operations")
+    table.add_column("type")
+    table.add_column("count", justify="right")
+    for type_label, count in summarize(rows).items():
+        table.add_row(type_label, str(count))
+    Console(stderr=True).print(table)
+    err.print(f"[green]Matrix written[/green] -> {out_path}")
+    err.print("Columns A-D are generated; fill in the recommendation, status and comments.")
     raise SystemExit(0)
 
 

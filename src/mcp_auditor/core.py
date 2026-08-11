@@ -33,6 +33,47 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Package manifests reveal a language even when its source files were filtered
+# out by the loader — which is exactly the case that used to be misreported.
+_LANGUAGE_MANIFESTS = {
+    "composer.json": "PHP",
+    "go.mod": "Go",
+    "cargo.toml": "Rust",
+    "pom.xml": "Java",
+    "build.gradle": "Java/Kotlin",
+    "gemfile": "Ruby",
+}
+
+_UNSCANNED = (
+    "It was NOT analyzed, so this is not a clean result. "
+    "Statically parsed: Python, TypeScript/JavaScript, JSON manifests and SKILL.md. "
+    "For anything else — or for a hosted server, or one whose tools are registered "
+    "dynamically at runtime — capture its tools/list response and audit that JSON."
+)
+
+
+def _not_analyzed_message(files: dict[str, str]) -> str:
+    """Say *why* nothing was found, and never imply the target is clean.
+
+    "This does not appear to be an MCP server" is the wrong sentence when the
+    real reason is a language the extractor does not read: an unscanned target
+    would then read as a passing one, which is the worst failure mode a scanner
+    has. Source files in those languages are filtered out before extraction, so
+    the language is inferred from the package manifest, which is read.
+    """
+    found = sorted({
+        language for path, language in (
+            (p, _LANGUAGE_MANIFESTS.get(p.lower().rsplit("/", 1)[-1])) for p in files
+        ) if language
+    })
+    if found:
+        return (
+            f"No MCP tool definitions found, and this target looks like a "
+            f"{'/'.join(found)} project. " + _UNSCANNED
+        )
+    return "No MCP tool definitions or MCP SDK dependency found. " + _UNSCANNED
+
+
 def _detect_auth_signal(files: dict[str, str]) -> bool:
     for text in files.values():
         if _AUTH_SIGNALS.search(text):
@@ -95,10 +136,7 @@ def audit_detailed(
                 score=None,
                 findings=[],
                 generated_at=generated_at,
-                message=(
-                    "No MCP tool definitions or MCP SDK dependency found. "
-                    "This does not appear to be an MCP server; no score was computed."
-                ),
+                message=_not_analyzed_message(files),
             ),
             [],
         )

@@ -20,7 +20,9 @@ mcp-audit-server = "mcp_auditor.mcp_server:main"
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.12.4,<1.13", "anyio>=4.5,<4.14"]
-dev = ["pytest>=7.0", "mcp>=1.12.4,<1.13", "anyio>=4.5,<4.14"]
+# Only `mcp-audit matrix --format xlsx` needs this; CSV output has no extra deps.
+xlsx = ["openpyxl>=3.1"]
+dev = ["pytest>=7.0", "mcp>=1.12.4,<1.13", "anyio>=4.5,<4.14", "openpyxl>=3.1"]
 
 [build-system]
 requires = ["hatchling"]

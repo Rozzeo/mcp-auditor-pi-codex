@@ -1,0 +1,26 @@
+# Connector-specific type labels for `mcp-audit matrix --types`.
+#
+# The classifier emits a fixed core vocabulary — Discovery, Search, Read, Write,
+# Send, Delete — so matrices stay comparable between connectors. Review boards
+# often want a domain word instead ("Scheduling", "Mailbox settings", "Write
+# (destructive)"); that belongs here rather than in the core list.
+#
+# The label is cosmetic: the prefilled recommendation still follows the core
+# type, so relabelling a write cannot quietly turn it into a read.
+
+# Exact action names win over patterns. For a facade operation, either the full
+# `tool -> resource.action` string or the bare `resource.action` matches.
+types:
+  outlook_set_vacation: Mailbox settings
+  wpcom-user-sites: Discovery
+
+# Regex, applied in order, first match wins. Case-insensitive.
+patterns:
+  - match: "_event$"
+    type: Scheduling
+  - match: "^find_meeting"
+    type: Scheduling
+  # Domain and DNS changes are writes the core vocabulary cannot know are
+  # high-blast-radius; a reviewer escalates them here.
+  - match: "^wpcom-domain-(update|restore|set)-"
+    type: Write (destructive)
