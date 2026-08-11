@@ -1,0 +1,338 @@
+{
+ "_source": "https://developer.wordpress.com/docs/mcp/tools-reference/",
+ "_note": "Hosted connector: no public source, so the catalogue is transcribed from the vendor docs. Verify against the page before a matrix built from this goes to review.",
+ "tools": [
+  {
+   "name": "wpcom-user-sites",
+   "description": "List WordPress.com and Jetpack-connected sites available to the authenticated user; supports search, status and privacy filters, pagination and optional metrics."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> action: list / describe",
+   "description": "Facade discovery interface: list returns the operation catalogue, describe returns the full JSON Schema for one operation."
+  },
+  {
+   "name": "wpcom-mcp-site-editor-context -> action: list / describe",
+   "description": "Facade discovery interface for site design context; this facade uses list / describe / get and never writes."
+  },
+  {
+   "name": "wpcom-mcp-site -> action: list / describe",
+   "description": "Facade discovery interface for site settings, stats, plugins, activity, themes and Jetpack modules."
+  },
+  {
+   "name": "wpcom-mcp-account -> action: list / describe",
+   "description": "Facade discovery interface for account-level operations; operates on the authenticated user, no site parameter."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> posts.list",
+   "description": "List posts with filters for status, author, search, taxonomy, date range, ordering and pagination."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> posts.get",
+   "description": "Get a single post by ID or slug; falls back to searching pages if the slug does not match a post."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> posts.create",
+   "description": "Create a new post; created as draft by default."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> posts.update",
+   "description": "Update an existing post; only supplied fields change. If status is publish, changes go live immediately."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> posts.delete",
+   "description": "Move a post to trash; restorable from WP admin within 30 days."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> pages.list",
+   "description": "List pages with filters for parent, status, search, ordering and pagination."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> pages.get",
+   "description": "Get a single page by ID or slug."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> pages.create",
+   "description": "Create a new page as draft; supports hierarchical structures and page templates."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> pages.update",
+   "description": "Update an existing page; publish status makes changes live immediately."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> pages.delete",
+   "description": "Move a page to trash; restorable within 30 days."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> comments.list",
+   "description": "List comments with filters for status, post, author, search, date range and pagination."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> comments.get",
+   "description": "Get a single comment by ID."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> comments.create",
+   "description": "Create a comment on a post; author fields auto-populate for authenticated users."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> comments.update",
+   "description": "Update an existing comment; approved status makes it visible immediately."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> comments.delete",
+   "description": "Move a comment to trash."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> media.list",
+   "description": "List media items with filters for mime type, post, author, search, date range and pagination."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> media.get",
+   "description": "Get a single media item by ID."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> media.create",
+   "description": "Upload a new media item (image, video, audio, document)."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> media.update",
+   "description": "Update media metadata, not the file itself; alt_text and caption changes apply immediately everywhere the media is used."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> media.delete",
+   "description": "Move a media item to trash; may break content that references it."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> categories.list",
+   "description": "List categories with optional filters."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> categories.get",
+   "description": "Get a single category by ID."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> categories.create",
+   "description": "Create a new category; supports parent-child hierarchy."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> categories.update",
+   "description": "Update a category; changing the slug changes archive URLs immediately and may break links."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> categories.delete",
+   "description": "Permanently delete a category - taxonomy terms have no trash. Assigned posts move to Uncategorized and child categories become top-level."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> tags.list",
+   "description": "List tags with optional filters; tag search is case-insensitive."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> tags.get",
+   "description": "Get a single tag by ID."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> tags.create",
+   "description": "Create a new tag."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> tags.update",
+   "description": "Update a tag; changing the slug changes archive URLs immediately."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> tags.delete",
+   "description": "Permanently delete a tag; removed from all associated posts."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> patterns.list",
+   "description": "List block patterns available on the site (theme, core, pattern directory)."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> patterns.get",
+   "description": "Get a single block pattern by name, including its block markup."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> synced-patterns.list",
+   "description": "List the site's synced (reusable) patterns."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> synced-patterns.get",
+   "description": "Get a single synced pattern by ID, including block markup."
+  },
+  {
+   "name": "wpcom-mcp-content-authoring -> content-search",
+   "description": "Free-text search across the site's content: posts, pages and other post types."
+  },
+  {
+   "name": "wpcom-mcp-site-editor-context -> theme.active",
+   "description": "Get the active theme's stylesheet slug and name."
+  },
+  {
+   "name": "wpcom-mcp-site-editor-context -> theme.presets",
+   "description": "Get the site's design tokens: colour palette, font sizes, font families, gradients, spacing scale."
+  },
+  {
+   "name": "wpcom-mcp-site-editor-context -> theme.styles",
+   "description": "Get applied styles from theme.json: block-level overrides and element-level typography and colours."
+  },
+  {
+   "name": "wpcom-mcp-site-editor-context -> blocks.allowed",
+   "description": "List block types registered on the site with name, title, description, category and style variations."
+  },
+  {
+   "name": "wpcom-mcp-site -> settings.get",
+   "description": "Read general, writing, reading, discussion, media, permalink and privacy settings."
+  },
+  {
+   "name": "wpcom-mcp-site -> settings.update",
+   "description": "Update site settings."
+  },
+  {
+   "name": "wpcom-mcp-site -> statistics.get",
+   "description": "Site totals (published posts, pages, subscribers) plus optional views, visitors and publishing counts for a date range."
+  },
+  {
+   "name": "wpcom-mcp-site -> plugin.list",
+   "description": "List installed plugins with status, version, update availability and permissions."
+  },
+  {
+   "name": "wpcom-mcp-site -> activity.get",
+   "description": "Activity log entries (posts, comments, plugin updates, backups, user actions), reverse-chronological, default last 6 months."
+  },
+  {
+   "name": "wpcom-mcp-site -> theme.list",
+   "description": "List installed themes on the site."
+  },
+  {
+   "name": "wpcom-mcp-site -> theme.set",
+   "description": "Switch the active theme."
+  },
+  {
+   "name": "wpcom-mcp-site -> monitor.status",
+   "description": "Jetpack Monitor uptime check status."
+  },
+  {
+   "name": "wpcom-mcp-site -> monitor.activate",
+   "description": "Activate Jetpack Monitor."
+  },
+  {
+   "name": "wpcom-mcp-site -> monitor.deactivate",
+   "description": "Deactivate Jetpack Monitor."
+  },
+  {
+   "name": "wpcom-mcp-site -> newsletter.status",
+   "description": "Jetpack Newsletter status."
+  },
+  {
+   "name": "wpcom-mcp-site -> newsletter.get_settings",
+   "description": "Jetpack Newsletter settings."
+  },
+  {
+   "name": "wpcom-mcp-site -> account-protection.status",
+   "description": "Jetpack Account Protection status."
+  },
+  {
+   "name": "wpcom-mcp-site -> account-protection.activate",
+   "description": "Activate Jetpack Account Protection."
+  },
+  {
+   "name": "wpcom-mcp-site -> account-protection.deactivate",
+   "description": "Deactivate Jetpack Account Protection."
+  },
+  {
+   "name": "wpcom-mcp-site -> manage-site.status",
+   "description": "Site lifecycle status (coming-soon, visibility)."
+  },
+  {
+   "name": "wpcom-mcp-site -> manage-site.launch",
+   "description": "Launch the site."
+  },
+  {
+   "name": "wpcom-mcp-site -> manage-site.set-visibility",
+   "description": "Change site visibility."
+  },
+  {
+   "name": "wpcom-mcp-account -> profile.get",
+   "description": "Basic profile: username, email, display name, avatar, locale, timezone; optionally preferences, stats and activity data."
+  },
+  {
+   "name": "wpcom-mcp-account -> profile.update",
+   "description": "Update profile fields such as display name, bio and locale."
+  },
+  {
+   "name": "wpcom-mcp-account -> notifications.get",
+   "description": "Notification preferences across email, push and timeline channels, including device list."
+  },
+  {
+   "name": "wpcom-mcp-account -> notifications.update",
+   "description": "Update notification settings."
+  },
+  {
+   "name": "wpcom-mcp-account -> inbox.get",
+   "description": "The user's notification inbox: messages, alerts, mentions, likes, follows."
+  },
+  {
+   "name": "wpcom-mcp-account -> achievements.get",
+   "description": "Earned badges, feats, gamification progress and trophy case."
+  },
+  {
+   "name": "wpcom-mcp-account -> domains.list",
+   "description": "List the user's domains across all sites."
+  },
+  {
+   "name": "wpcom-mcp-account -> domains.get",
+   "description": "Domain details: management capabilities, DNS configuration, DNSSEC, SSL status."
+  },
+  {
+   "name": "wpcom-mcp-account -> domains.dns_records",
+   "description": "DNS records for a single domain."
+  },
+  {
+   "name": "wpcom-mcp-account -> domains.set_primary",
+   "description": "Set a custom domain as a site's primary domain."
+  },
+  {
+   "name": "wpcom-mcp-account -> connections.get",
+   "description": "Social and third-party service connections, including health tests."
+  },
+  {
+   "name": "wpcom-mcp-account -> security.get",
+   "description": "Security status: 2FA, application passwords, active sessions, login history, account age."
+  },
+  {
+   "name": "wpcom-mcp-account -> currency.preview",
+   "description": "Preview the impact of changing account currency; does not commit."
+  },
+  {
+   "name": "wpcom-mcp-account -> currency.change",
+   "description": "Change the account currency."
+  },
+  {
+   "name": "wpcom-domain-purchase",
+   "description": "Search available domains and generate checkout links for registration."
+  },
+  {
+   "name": "wpcom-domain-update-dns-records",
+   "description": "Add or remove DNS records (A, AAAA, ALIAS, CAA, CNAME, MX, NS, SRV, TXT) for a managed domain."
+  },
+  {
+   "name": "wpcom-domain-restore-default-dns-records",
+   "description": "Restore WordPress.com default A records or the default www CNAME for a domain."
+  },
+  {
+   "name": "wpcom-domain-update-nameservers",
+   "description": "Set nameservers for a custom domain (2 to 13 hostnames)."
+  },
+  {
+   "name": "wpcom-domain-set-mail-service",
+   "description": "Configure DNS for an external mail service (Google Workspace, iCloud Mail, Office 365, Zoho Mail)."
+  },
+  {
+   "name": "wpcom-checkout-url",
+   "description": "Generate a pre-configured checkout URL for products or a subscription renewal."
+  },
+  {
+   "name": "wpcom-plans-list",
+   "description": "List WordPress.com plans with prices and per-tier feature lists."
+  }
+ ]
+}
