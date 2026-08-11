@@ -97,7 +97,6 @@ def autodraft(
     use_llm: bool = False,
     cache_dir: str | None = None,
     atlas: dict | None = None,
-    provider: str | None = None,
     model: str | None = None,
 ) -> DraftResult:
     """Gate `candidates` through the included/excluded criteria above, then
@@ -116,7 +115,7 @@ def autodraft(
             result.excluded.append({"ident": cand.ident, "title": cand.title, "reason": reason})
             continue
 
-        draft = distill(cand, use_llm=use_llm, cache_dir=cache_dir, provider=provider, model=model)
+        draft = distill(cand, use_llm=use_llm, cache_dir=cache_dir, model=model)
         if "raw" in draft:
             result.excluded.append(
                 {"ident": cand.ident, "title": cand.title, "reason": "malformed_llm_output"}

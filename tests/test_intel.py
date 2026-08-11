@@ -75,44 +75,31 @@ def test_distill_manual_path_is_offline_by_default():
     assert "ident" in res
 
 
-# --- provider auto-selection (Gemini vs Anthropic) ------------------------------
+# --- LLM distillation (Anthropic only) ----------------------------------------
 
 
-def test_pick_provider_prefers_gemini_when_both_keys_set(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "g")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
-    assert distill._pick_provider() == "gemini"
-
-
-def test_pick_provider_falls_back_to_anthropic(monkeypatch):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
-    assert distill._pick_provider() == "anthropic"
-
-
-def test_pick_provider_defaults_to_gemini_with_no_keys(monkeypatch):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    assert distill._pick_provider() == "gemini"
-
-
-def test_distill_dispatches_to_the_requested_provider(monkeypatch):
+def test_distill_calls_anthropic_with_the_default_model(monkeypatch):
     calls = []
-    monkeypatch.setattr(distill, "_call_gemini", lambda c, m: calls.append(("gemini", m)) or {"status": "drafted"})
-    monkeypatch.setattr(distill, "_call_anthropic", lambda c, m: calls.append(("anthropic", m)) or {"status": "drafted"})
-
-    distill.distill(Candidate("arxiv", "1", "t", "s"), use_llm=True, provider="anthropic")
-    distill.distill(Candidate("arxiv", "2", "t", "s"), use_llm=True, provider="gemini")
-    assert calls == [("anthropic", "claude-opus-4-8"), ("gemini", "gemini-2.5-flash")]
+    monkeypatch.setattr(distill, "_call_anthropic",
+                        lambda c, m: calls.append(m) or {"status": "drafted"})
+    distill.distill(Candidate("arxiv", "1", "t", "s"), use_llm=True)
+    assert calls == [distill.DEFAULT_MODEL]
 
 
 def test_distill_model_override_is_respected(monkeypatch):
     seen = {}
-    monkeypatch.setattr(distill, "_call_gemini", lambda c, m: seen.setdefault("model", m) or {"status": "drafted"})
-    distill.distill(Candidate("arxiv", "3", "t", "s"), use_llm=True, provider="gemini", model="gemini-custom")
-    assert seen["model"] == "gemini-custom"
+    monkeypatch.setattr(distill, "_call_anthropic",
+                        lambda c, m: seen.setdefault("model", m) or {"status": "drafted"})
+    distill.distill(Candidate("arxiv", "3", "t", "s"), use_llm=True, model="claude-custom")
+    assert seen["model"] == "claude-custom"
+
+
+def test_no_second_provider_can_be_auto_selected(monkeypatch):
+    """A provider that defaults to itself with no key set decides where abstracts
+    go based on whatever credential happens to be in the environment. There is
+    one provider, and it is chosen explicitly."""
+    assert not hasattr(distill, "_pick_provider")
+    assert not hasattr(distill, "_call_gemini")
 
 
 # --- publication-quality ranking ---------------------------------------------
