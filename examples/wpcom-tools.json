@@ -1,6 +1,6 @@
 {
  "_source": "https://developer.wordpress.com/docs/mcp/tools-reference/",
- "_note": "Hosted connector: no public source, so the catalogue is transcribed from the vendor docs. Verify against the page before a matrix built from this goes to review.",
+ "_note": "Hosted connector: no public source, so the catalogue is transcribed from the vendor docs. `mcp-audit matrix` refetches _source and checks every name against it, marking any that is not on the page.",
  "tools": [
   {
    "name": "wpcom-user-sites",

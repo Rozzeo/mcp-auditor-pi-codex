@@ -311,6 +311,47 @@ def installed_cmd(as_json: bool, fail_on: str | None) -> None:
     raise SystemExit(0)
 
 
+def _verify_against_source(target: str, rows, *, skip: bool, err: Console):
+    """Check a docs-derived tool list against the page it was transcribed from.
+
+    Returns None when the target is not such a list. A repo, or a tools/list
+    response captured from the running server, is already first-hand evidence —
+    stamping it with a provenance column would add a column of noise.
+    """
+    from .provenance import Provenance, declared_source, verify
+
+    path = Path(target)
+    try:
+        if not path.is_file():
+            return None
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    source = declared_source(text)
+    if not source:
+        return None
+    if skip:
+        return Provenance(source=source, status="skipped")
+
+    prov = verify(sorted({row.action for row in rows}), source)
+    if prov.status == "unreachable":
+        err.print(f"[yellow]could not verify:[/yellow] {prov.summary()}")
+    elif prov.missing:
+        err.print(f"[red]{len(prov.missing)} operation(s) not found on the source page:[/red]")
+        for missing in prov.missing[:10]:
+            err.print(f"  · {missing}")
+        if len(prov.missing) > 10:
+            err.print(f"  … and {len(prov.missing) - 10} more")
+        err.print(
+            "[yellow]Those rows are marked NOT ON PAGE.[/yellow] Confirm them against the "
+            "vendor's page before this matrix goes to a review board."
+        )
+    else:
+        err.print(f"[green]verified:[/green] {prov.summary()}")
+    return prov
+
+
 @main.command(
     name="matrix",
     help="Build a connector approval matrix (one row per operation) for InfoSec review.",
@@ -330,15 +371,23 @@ def installed_cmd(as_json: bool, fail_on: str | None) -> None:
               help="YAML overrides mapping actions to connector-specific type labels.")
 @click.option("--no-prefill", is_flag=True,
               help="Leave the recommendation and status columns empty for a human to fill.")
+@click.option("--no-verify", is_flag=True,
+              help="Skip checking a docs-derived tool list against its _source page (offline use).")
 def matrix_cmd(target: str, out_path: str, fmt: str | None, connector: str | None,
-               platform: str, status: str, types_path: str | None, no_prefill: bool) -> None:
+               platform: str, status: str, types_path: str | None, no_prefill: bool,
+               no_verify: bool) -> None:
     """Enumerate a connector's operations and classify each one.
 
     Operations come from whatever the extractor can already read — a saved
     `tools/list` response, a JSON manifest, or a server's source. The connector
     is never started, so a hosted server needs its tool list supplied as JSON.
+
+    When that JSON names the page it was transcribed from in `_source`, every
+    operation is checked against that page and the result travels in a `source`
+    column, so a name a model invented reaches the review board labelled rather
+    than indistinguishable from the real ones.
     """
-    from .matrix import Overrides, build_matrix, summarize, write_csv, write_xlsx
+    from .matrix import Overrides, apply_provenance, build_matrix, summarize, write_csv, write_xlsx
 
     err = Console(stderr=True)
     try:
@@ -360,6 +409,10 @@ def matrix_cmd(target: str, out_path: str, fmt: str | None, connector: str | Non
     name = connector or Path(target).name or target
     rows = build_matrix(tools, name, status=status, platform=platform,
                         overrides=Overrides.load(types_path), prefill=not no_prefill)
+
+    prov = _verify_against_source(target, rows, skip=no_verify, err=err)
+    if prov is not None:
+        apply_provenance(rows, prov)
 
     chosen = (fmt or Path(out_path).suffix.lstrip(".") or "xlsx").lower()
     try:
