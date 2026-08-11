@@ -113,3 +113,22 @@ def test_message_never_claims_the_target_is_fine():
 
 def test_plain_non_mcp_project_does_not_invent_a_language():
     assert "looks like a" not in _message_for({"app.py": "print(1)"})
+
+
+def test_non_github_url_explains_itself_instead_of_reporting_a_missing_path():
+    """A docs or product page used to fall through to the local loader and
+    report "Target path does not exist", which names neither problem nor fix."""
+    import pytest
+    from mcp_auditor.core import audit
+    with pytest.raises(ValueError) as exc:
+        audit("https://6sense.com/platform/mcp-server/")
+    msg = str(exc.value)
+    assert "not a GitHub repository" in msg
+    assert "tools/list" in msg
+
+
+def test_github_urls_are_still_accepted(monkeypatch):
+    import mcp_auditor.fetcher as fetcher
+    monkeypatch.setattr(fetcher, "fetch_github", lambda *a, **k: {})
+    from mcp_auditor.core import audit
+    assert audit("https://github.com/owner/repo").is_mcp_server is False

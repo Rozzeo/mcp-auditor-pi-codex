@@ -29,6 +29,28 @@ _AUTH_SIGNALS = re.compile(
 )
 
 
+_ANY_URL = re.compile(r"^\s*https?://", re.IGNORECASE)
+
+
+def _reject_non_github_url(target: str) -> None:
+    """A URL that isn't a GitHub repo is a documentation or product page.
+
+    Falling through to the local loader reported "Target path does not exist",
+    which describes neither the problem nor the fix. Reading a vendor page and
+    turning prose into a tool list is a model's job — this tool is a
+    deterministic parser, and pretending otherwise would put tool names nobody
+    can verify into a review artifact.
+    """
+    if not _ANY_URL.match(target):
+        return
+    raise ValueError(
+        f"{target} is a URL but not a GitHub repository, so there is no source to read. "
+        "Documentation and product pages are not parsed: capture the server's tools/list "
+        'response as {"tools": [{"name": ..., "description": ...}, ...]} and pass that '
+        "file instead. See examples/wpcom-tools.json."
+    )
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -121,6 +143,7 @@ def audit_detailed(
 
         files = fetch_github(target)
     else:
+        _reject_non_github_url(target)
         files = load_local(target)
 
     extraction = extract(files)
