@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._theme import SEVERITY_COLORS, THEME_TOKENS_CSS
+from ._theme import ATTENTION_SEVERITIES, SEVERITY_CSS, THEME_TOKENS_CSS
 
 # Per-tool rules the JS engine mirrors, with the signature keys each one needs.
 _EMBED_KEYS = {
@@ -127,8 +127,8 @@ def build_playground(signatures: dict[str, Any]) -> str:
     data = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     return (
         _TEMPLATE
-        .replace("__THEME__", THEME_TOKENS_CSS)
-        .replace("__SEV_COLORS__", json.dumps(SEVERITY_COLORS))
+        .replace("__THEME__", THEME_TOKENS_CSS + SEVERITY_CSS)
+        .replace("__ATTENTION__", json.dumps(ATTENTION_SEVERITIES))
         .replace("__DATA__", data)
     )
 
@@ -168,18 +168,16 @@ select { margin-bottom: 4px; }
 .findings { display: grid; gap: 10px; }
 .finding { border: 1px solid var(--border); border-left: 4px solid var(--grid);
   border-radius: 10px; padding: 12px 14px; background: var(--surface); }
+.finding.attention { border-left-color: var(--accent); }
 .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
-.chip { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
-  padding: 2px 8px; border-radius: 99px; color: #fff; }
-.chip.medium, .chip.info { color: #1a1a19; }
 .rule-id { font-family: ui-monospace, monospace; font-size: 13px; font-weight: 600; }
 .badge { font-size: 11px; border: 1px solid var(--border); border-radius: 99px; padding: 1px 8px; color: var(--ink-2); }
 .msg { font-size: 14px; margin-bottom: 6px; }
 .evidence { font-family: ui-monospace, monospace; font-size: 12px; background: var(--code-bg);
   border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; white-space: pre-wrap; color: var(--ink-2); }
 .fix { font-size: 12.5px; color: var(--ink-2); }
-.fix b { color: var(--good); }
-.clean { text-align: center; padding: 36px 16px; color: var(--good); font-weight: 600;
+.fix b { color: var(--ink); }
+.clean { text-align: center; padding: 36px 16px; color: var(--ink); font-weight: 600;
   border: 1px dashed var(--border); border-radius: 10px; }
 .recs { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px; }
 .recs h2 { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
@@ -188,9 +186,10 @@ select { margin-bottom: 4px; }
 .recs li { font-size: 13px; color: var(--ink-2); }
 .recs li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
 .recs .who { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
-  margin-right: 6px; }
+  margin-right: 6px; color: var(--ink-2); }
+.recs .who.attention { color: var(--accent); }
 .note { font-size: 12px; color: var(--muted); margin-top: 14px; }
-.err { color: var(--crit); font-size: 12px; margin-top: 4px; min-height: 16px; }
+.err { color: var(--accent); font-size: 12px; margin-top: 4px; min-height: 16px; }
 footer { margin-top: 28px; font-size: 12px; color: var(--muted); }
 </style>
 </head>
@@ -233,7 +232,7 @@ Nothing leaves this page — everything runs locally in your browser.</p>
 const DATA = __DATA__;
 const R = DATA.rules;
 const WEIGHTS = { critical: 40, high: 20, medium: 10, low: 5, info: 0 };
-const SEV_COLOR = __SEV_COLORS__;
+const ATTENTION = new Set(__ATTENTION__);
 const SEV_RANK = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
 function rx(p) { try { return new RegExp(p, "i"); } catch (e) { return null; } }
@@ -370,7 +369,7 @@ function render() {
   let score = 100;
   findings.forEach(f => { score -= WEIGHTS[f.severity] || 0; });
   score = Math.max(0, score);
-  const color = score >= 80 ? "var(--good)" : score >= 50 ? "var(--warn)" : "var(--crit)";
+  const color = score >= 80 ? "var(--ink)" : "var(--accent)";
   $("score").innerHTML = score + "<small>/100</small>";
   $("score").style.color = color;
   const meter = $("meter"); meter.style.width = score + "%"; meter.style.background = color;
@@ -382,9 +381,9 @@ function render() {
     return;
   }
   box.innerHTML = findings.map(f => `
-    <div class="finding" style="border-left-color:${SEV_COLOR[f.severity]}">
+    <div class="finding${ATTENTION.has(f.severity) ? " attention" : ""}">
       <div class="top">
-        <span class="chip ${f.severity}" style="background:${SEV_COLOR[f.severity]}">${f.severity}</span>
+        <span class="chip ${f.severity}">${f.severity}</span>
         <span class="rule-id">${f.id}</span>
         ${f.threat ? `<span class="badge">${f.threat}</span>` : ""}
         ${f.confidence ? `<span class="badge">confidence: ${f.confidence}</span>` : ""}
@@ -402,7 +401,7 @@ function renderRecs(findings) {
   const seen = new Set();
   const items = findings.filter(f => !seen.has(f.id) && seen.add(f.id));
   box.innerHTML = `<div class="recs"><h2>What to fix first</h2><ol>` +
-    items.map(f => `<li><span class="who" style="color:${SEV_COLOR[f.severity]}">${f.id}</span>` +
+    items.map(f => `<li><span class="who${ATTENTION.has(f.severity) ? " attention" : ""}">${f.id}</span>` +
                    `${esc(f.recommendation)}</li>`).join("") +
     `</ol></div>`;
 }

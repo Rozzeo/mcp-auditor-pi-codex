@@ -1,6 +1,7 @@
 """Tests for the HTML dashboard and the playground generator (presentation only)."""
 
 import json
+import re
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -123,3 +124,36 @@ def test_cli_playground_command(tmp_path):
     result = runner.invoke(main, ["playground", "--out", str(out)])
     assert result.exit_code == 0
     assert out.exists() and "MCP Security Playground" in out.read_text(encoding="utf-8")
+
+
+def test_playground_script_declares_every_constant_it_uses():
+    """No SCREAMING_CASE identifier may be used without being declared.
+
+    The playground's JS is assembled by string substitution, so renaming a
+    Python-side constant can leave a live reference to a name that no longer
+    exists. That throws at runtime inside a render path and the page silently
+    keeps showing its previous state — which is exactly what happened when
+    `SEV_COLOR` was replaced: the score updated and the findings list did not.
+    """
+    html = build_playground(load_signatures())
+    # Start past the embedded DATA blob: it is signature JSON, and its SQL
+    # keywords and threat ids are not identifiers.
+    script = html[html.index("const R = DATA.rules"):]
+
+    declared = set(re.findall(r"\bconst\s+([A-Z][A-Z0-9_]{2,})\s*=", script))
+    # Only indexed or dotted uses — `SEV_COLOR[...]`, `ATTENTION.has(...)`.
+    # That is the shape a dead constant reference actually takes. Quoted
+    # strings are deliberately NOT stripped first: the references live inside
+    # `${...}` in template literals whose HTML attributes carry quotes of their
+    # own, and stripping ate exactly the text this test exists to inspect.
+    used = set(re.findall(r"\b([A-Z][A-Z0-9_]{2,})\s*[\[.]", script))
+    known = {"JSON", "DATA", "Math", "Object", "Array"}
+
+    assert not (used - declared - known), (
+        f"playground JS references undeclared constants: {sorted(used - declared - known)}"
+    )
+
+
+def test_playground_substitutes_every_placeholder():
+    html = build_playground(load_signatures())
+    assert not re.findall(r"__[A-Z][A-Z0-9_]*__", html)
