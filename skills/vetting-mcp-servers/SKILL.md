@@ -45,14 +45,25 @@ language the extractor does not parse — build the tool list yourself and hand
 it to the CLI:
 
 1. Read the connector's `tools/list` response, or its documentation page.
-2. Write `{"tools": [{"name": …, "description": …}, …]}` to a file.
+2. Write `{"_source": "<page URL>", "tools": [{"name": …, "description": …}, …]}`
+   to a file. **Copy each name exactly as the page spells it** — the name is
+   what gets checked, and a tidied-up one fails the check.
 3. `mcp-audit matrix tools.json --connector "<name>" --out matrix.xlsx`
 
 Doing the reading step yourself is the point: the CLI is deterministic and
-makes no model calls, so its half of the output stays reproducible. Check the
-list you extracted against the source before the matrix goes to review — a docs
-page can lag the deployed server, and a row you missed is a tool nobody
-reviewed. Say which source you used and when it was published.
+makes no model calls, so its half of the output stays reproducible.
+
+`_source` is what makes your reading auditable. With it, `matrix` refetches the
+page and asserts every name you wrote is really there, then records the result
+per row in a `source` column. Omit it and nothing checks you. So: never write a
+name you did not read on the page — a plausible-looking one you inferred from a
+naming pattern comes back `NOT ON PAGE`, which is the system working, not a bug
+to route around by deleting `_source`.
+
+The check confirms your transcription against the page, and nothing more. Still
+say which page you used and when it was published: a docs page can lag the
+deployed server, and a tool the vendor never documented is invisible to both of
+you.
 
 ## Severity is impact; confidence is how sure the pattern is
 

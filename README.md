@@ -82,7 +82,7 @@ mcp-audit matrix https://github.com/owner/repo --format csv --out matrix.csv
 |---|---|
 | A repo in Python or TS/JS | `mcp-audit matrix <path-or-github-url> --out matrix.xlsx` |
 | A **running** server | Save its `tools/list` response → `mcp-audit matrix tools.json …` |
-| Only a **docs page** | Turn the docs into `tools.json` (below), then the same command |
+| Only a **docs page** | Turn the docs into `tools.json` (below); each name is then checked back against the page |
 | A repo in PHP, Go, Rust, Java… | Not statically parseable — use the `tools/list` or docs route |
 
 **1 — from a repo.** Works when the tools are declared in code the extractor
@@ -118,13 +118,57 @@ which is what makes its output reproducible. So ask an agent to do the reading
 step and hand the result back to the CLI:
 
 > Read `<docs URL>` and list every tool and operation with its exact name and
-> one-line description. Write them to `tools.json` in the shape above, then run
+> one-line description. Write them to `tools.json` in the shape above, with the
+> page URL in `_source`, then run
 > `mcp-audit matrix tools.json --connector "<name>" --out matrix.xlsx`.
 
-The `vetting-mcp-servers` skill in `skills/` carries this workflow. Verify the
-extracted list against the page before the matrix goes to a review board: a
-docs page can lag the deployed server, and a silently missing row is a tool
-nobody reviewed.
+The `vetting-mcp-servers` skill in `skills/` carries this workflow.
+
+#### Every transcribed name is checked against its page
+
+A tool list read out of prose is a model's reading until something confirms it.
+So when `tools.json` names where it came from:
+
+```json
+{
+  "_source": "https://developer.wordpress.com/docs/mcp/tools-reference/",
+  "tools": [{"name": "wpcom-user-sites", "description": "List sites."}]
+}
+```
+
+…`matrix` refetches that page, reduces it to text, and asserts every operation
+name actually occurs there. The verdict travels with the sheet in a `source`
+column, one cell per row:
+
+```
+verified: 83/83 names confirmed on developer.wordpress.com
+```
+
+| action | … | source |
+|---|---|---|
+| `wpcom-user-sites` | … | on page · 2026-08-11 · https://developer.wordpress.com/… |
+| `wpcom-delete-site` | … | **NOT ON PAGE** · 2026-08-11 · https://developer.wordpress.com/… |
+
+A name the model invented is not on the vendor's page, so it reaches the review
+board labelled instead of sitting there looking exactly like the real rows. The
+check is deterministic — no LLM call is involved, and the audited connector is
+still never started or contacted; only the vendor's documentation is fetched,
+the same class of network access as reading a GitHub repo.
+
+Matching is per name-part, so facade rows work: `content-authoring -> posts.list`
+needs **both** halves on the page, which is what catches a real facade with an
+invented operation hung off it. Separator spelling (`-`, `_`, `.`) and case are
+ignored; a fragment that is a bare generic word (`list`, `get`, `describe`)
+never confirms a row on its own.
+
+The column appears only for a transcribed list — a repo or a captured
+`tools/list` response is first-hand already. Use `--no-verify` offline; the
+source is still recorded, marked unchecked. A page that cannot be fetched
+downgrades to `UNCHECKED` rather than losing the matrix.
+
+Note what this does and does not prove: it confirms the transcription matches
+the page, not that the page matches the deployed server. A docs page can lag,
+and a tool the vendor forgot to document is invisible to both.
 
 **The connector is never started** on any of these paths. Facade tools that hide
 many operations behind one MCP tool expand to one row each, but only from a
@@ -159,13 +203,14 @@ core type, so relabelling a write cannot quietly turn it into a plain "Approved"
 | AI team recomends, InfoSec status | seeded with a default, meant to be overridden |
 | Comments | left for the reviewer |
 | platform | optional, added by `--platform "Claude, Base44"` |
+| source | automatic, only for a list transcribed from a docs page (above) |
 
 `--no-prefill` leaves the two judgment columns empty. `--status` sets the InfoSec
 column's constant (default `Pending InfoSec review`).
 
-Output is a single flat `.xlsx` sheet — amber for writes, red for destructive —
-or CSV. **`.xlsx` needs `openpyxl`**: `pip install 'mcp-auditor[xlsx]'`. CSV has
-no extra dependency.
+Output is a single flat `.xlsx` sheet — amber for writes, red for destructive and
+for any row whose name is not on its source page — or CSV. **`.xlsx` needs
+`openpyxl`**: `pip install 'mcp-auditor[xlsx]'`. CSV has no extra dependency.
 
 ### Accuracy
 

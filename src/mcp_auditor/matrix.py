@@ -79,14 +79,18 @@ class ActionRow:
     status: str = ""
     comments: str = ""
     platform: str = ""
+    # Where this row's name was confirmed, for a catalogue transcribed from docs.
+    source: str = ""
     # Not exported: how the type was decided, for --explain and for tests.
     reason: str = ""
 
-    def cells(self, with_platform: bool) -> list[str]:
+    def cells(self, with_platform: bool, with_source: bool = False) -> list[str]:
         row = [self.connector, self.action, self.type, self.description,
                self.recommends, self.status, self.comments]
         if with_platform:
             row.append(self.platform)
+        if with_source:
+            row.append(self.source)
         return row
 
 
@@ -272,6 +276,17 @@ def build_matrix(tools: Iterable[Tool], connector: str, *, status: str = "Pendin
     return rows
 
 
+def apply_provenance(rows: Iterable[ActionRow], prov) -> None:
+    """Stamp each row with where its name was confirmed.
+
+    Runs after `build_matrix` because facade expansion is what produces the
+    names that need checking: `posts.delete` is the row a reviewer approves, so
+    `posts.delete` is what has to be on the vendor's page.
+    """
+    for row in rows:
+        row.source = prov.cell(row.action)
+
+
 def summarize(rows: Iterable[ActionRow]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for row in rows:
@@ -279,13 +294,25 @@ def summarize(rows: Iterable[ActionRow]) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
 
 
+def _header_for(rows: Iterable[ActionRow], platform: bool) -> tuple[list[str], bool]:
+    """The header, plus whether a source column is warranted.
+
+    The column appears only for a catalogue transcribed from documentation —
+    adding an always-empty column to every repo-derived matrix would change the
+    shape review boards already read for no gain.
+    """
+    with_source = any(row.source for row in rows)
+    header = HEADER + (["platform"] if platform else []) + (["source"] if with_source else [])
+    return header, with_source
+
+
 def write_csv(rows: list[ActionRow], path: str | Path, platform: bool = False) -> None:
-    header = HEADER + (["platform"] if platform else [])
+    header, with_source = _header_for(rows, platform)
     with open(path, "w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(header)
         for row in rows:
-            w.writerow(row.cells(platform))
+            w.writerow(row.cells(platform, with_source))
 
 
 def write_xlsx(rows: list[ActionRow], path: str | Path, platform: bool = False) -> None:
@@ -303,7 +330,7 @@ def write_xlsx(rows: list[ActionRow], path: str | Path, platform: bool = False) 
             "(or use --format csv)."
         ) from exc
 
-    header = HEADER + (["platform"] if platform else [])
+    header, with_source = _header_for(rows, platform)
     wb = Workbook()
     ws = wb.active
     ws.title = "Connectors"
@@ -320,14 +347,17 @@ def write_xlsx(rows: list[ActionRow], path: str | Path, platform: bool = False) 
     amber = PatternFill("solid", fgColor="FFE699")
     red = PatternFill("solid", fgColor="F4B0B0")
     for row in rows:
-        ws.append(row.cells(platform))
+        ws.append(row.cells(platform, with_source))
         low = row.type.lower()
         fill = red if ("delete" in low or "destructive" in low) else (
             amber if low in ("write", "send") or "write" in low else None)
         if fill:
             ws.cell(row=ws.max_row, column=3).fill = fill
+        # An unconfirmed name is the one thing a reviewer must not skim past.
+        if with_source and "NOT ON PAGE" in row.source:
+            ws.cell(row=ws.max_row, column=len(header)).fill = red
 
-    widths = [22, 46, 16, 62, 26, 28, 34, 30]
+    widths = [22, 46, 16, 62, 26, 28, 34] + ([30] if platform else []) + ([52] if with_source else [])
     for i, width in enumerate(widths[:len(header)], start=1):
         ws.column_dimensions[get_column_letter(i)].width = width
     for row in ws.iter_rows(min_row=2, min_col=4, max_col=4):
