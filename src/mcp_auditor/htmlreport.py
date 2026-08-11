@@ -4,9 +4,9 @@
 no scripts required to read it — so a report can be attached to a ticket, mailed
 to a security reviewer, or opened from CI artifacts. Carries no detection logic.
 
-Colors follow the validated reference dataviz palette (status colors for
-severity, blue ramp for magnitude); severity is never encoded by color alone —
-every mark carries a text label.
+Three colours only — black, white, one orange — from `_theme`. Orange marks the
+findings that need attention and nothing else; severity is never encoded by
+colour alone, since every mark carries its text label.
 """
 
 from __future__ import annotations
@@ -14,11 +14,10 @@ from __future__ import annotations
 import html
 from collections import Counter
 
-from ._theme import SEVERITY_COLORS as _SEV_COLOR
-from ._theme import THEME_TOKENS_CSS
+from ._theme import SEVERITY_CSS, THEME_TOKENS_CSS, attention, severity_class
 from .types import SEVERITY_ORDER, AuditReport
 
-_CSS = THEME_TOKENS_CSS + """
+_CSS = THEME_TOKENS_CSS + SEVERITY_CSS + """
 * { box-sizing: border-box; margin: 0; }
 body {
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -47,22 +46,23 @@ header .target { font-family: ui-monospace, monospace; font-size: 14px; color: v
   padding: 10px 12px; background: var(--surface);
 }
 .tile b { display: block; font-size: 24px; font-weight: 700; }
+.tile.attention b { color: var(--accent); }
+.tile.attention { box-shadow: inset 0 0 0 1px var(--accent); }
+.tile.empty b { color: var(--muted); font-weight: 500; }
 .tile span { font-size: 12px; color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
-.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .bars { display: grid; gap: 8px; }
 .bar-row { display: grid; grid-template-columns: 170px 1fr 32px; gap: 10px; align-items: center; font-size: 13px; }
 .bar-row .label { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bar-track { height: 14px; background: none; }
-.bar-track > i { display: block; height: 100%; background: var(--accent); border-radius: 0 4px 4px 0; min-width: 2px; }
+/* Magnitude, not alarm. These bars count findings per category — every one of
+   them is already a finding, so painting them all orange would spend the only
+   attention colour on the least urgent thing on the page. */
+.bar-track > i { display: block; height: 100%; background: var(--ink-2); border-radius: 0 4px 4px 0; min-width: 2px; }
 .bar-row .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
 .findings { display: grid; gap: 12px; margin-top: 16px; }
 .finding { border-left: 4px solid var(--grid); }
+.finding.attention { border-left-color: var(--accent); }
 .finding .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
-.chip {
-  font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
-  padding: 2px 8px; border-radius: 99px; color: #fff;
-}
-.chip.info, .chip.medium { color: #1a1a19; }
 .rule-id { font-family: ui-monospace, monospace; font-size: 13px; font-weight: 600; }
 .loc { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); word-break: break-all; }
 .badge { font-size: 11px; border: 1px solid var(--border); border-radius: 99px; padding: 2px 8px; color: var(--ink-2); }
@@ -73,11 +73,11 @@ header .target { font-family: ui-monospace, monospace; font-size: 14px; color: v
   color: var(--ink-2);
 }
 .fix { font-size: 13px; color: var(--ink-2); }
-.fix b { color: var(--good); font-weight: 600; }
+.fix b { color: var(--ink); font-weight: 600; }
 .suppressed { opacity: .55; }
 .suppressed .msg { text-decoration: line-through; }
 .sup-note { font-size: 12px; font-style: italic; color: var(--muted); margin-bottom: 6px; }
-.clean { text-align: center; padding: 40px 20px; color: var(--good); font-weight: 600; }
+.clean { text-align: center; padding: 40px 20px; color: var(--ink); font-weight: 600; }
 .cap-list { display: grid; gap: 10px; }
 .cap-row { display: grid; grid-template-columns: 160px 1fr; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .cap-row:last-child { border-bottom: 0; padding-bottom: 0; }
@@ -89,11 +89,13 @@ footer { margin-top: 32px; font-size: 12px; color: var(--muted); }
 
 
 def _score_color(score: int) -> str:
-    if score >= 80:
-        return "var(--good)"
-    if score >= 50:
-        return "var(--warn)"
-    return "var(--crit)"
+    """Ink when nothing needs doing, orange when something does.
+
+    Two states rather than three: the verdict sentence below the meter already
+    separates "needs review" from "high risk", and a hue that means *attention*
+    cannot also mean *slightly less attention* without turning into decoration.
+    """
+    return "var(--ink)" if score >= 80 else "var(--accent)"
 
 
 def _verdict(score: int) -> str:
@@ -106,6 +108,13 @@ def _verdict(score: int) -> str:
 
 def _esc(text: object) -> str:
     return html.escape(str(text), quote=True)
+
+
+def _tile_class(severity: str, count: int) -> str:
+    """A zero count is greyed rather than coloured — nothing to attend to."""
+    if count == 0:
+        return " empty"
+    return " attention" if attention(severity) else ""
 
 
 def render_html(report: AuditReport) -> str:
@@ -123,8 +132,8 @@ def render_html(report: AuditReport) -> str:
     active = [f for f in report.findings if not f.suppressed]
 
     tiles = "".join(
-        f'<div class="tile"><b>{summary[sev]}</b>'
-        f'<span><i class="dot" style="background:{_SEV_COLOR[sev]}"></i>{sev}</span></div>'
+        f'<div class="tile{_tile_class(sev, summary[sev])}"><b>{summary[sev]}</b>'
+        f'<span><i class="dot {severity_class(sev)}"></i>{sev}</span></div>'
         for sev in SEVERITY_ORDER
     )
 
@@ -196,9 +205,9 @@ def _policy_card(report: AuditReport) -> str:
         return ""
     policy = report.policy
     decision = policy.get("decision", "manual_review")
-    color = {"allow": "var(--good)", "deny": "var(--crit)", "manual_review": "var(--warn)"}.get(
-        decision, "var(--warn)"
-    )
+    # Only `allow` needs nothing from the reader; the other two are the same
+    # call to action, and the word beneath them says which one it is.
+    color = "var(--ink)" if decision == "allow" else "var(--accent)"
     identity = f"{policy.get('department')} / {policy.get('employee')}"
     if policy.get("agent"):
         identity += f" / {policy['agent']}"
@@ -219,7 +228,8 @@ def _policy_card(report: AuditReport) -> str:
 
 
 def _finding_card(f) -> str:
-    sev_color = _SEV_COLOR.get(f.severity, "var(--muted)")
+    sev = severity_class(f.severity)
+    flag = " attention" if attention(f.severity) else ""
     conf = f' <span class="badge">confidence: {_esc(f.confidence)}</span>' if f.confidence else ""
     threat = f' <span class="badge">{_esc(f.threat_id)}</span>' if f.threat_id else ""
     cite = ""
@@ -237,9 +247,9 @@ def _finding_card(f) -> str:
     )
     tool = f' <span class="badge">tool: {_esc(f.tool_name)}</span>' if f.tool_name else ""
     return f"""
-<div class="card finding{sup_cls}" style="border-left-color:{sev_color}">
+<div class="card finding{flag}{sup_cls}">
   <div class="top">
-    <span class="chip {f.severity}" style="background:{sev_color}">{_esc(f.severity)}</span>
+    <span class="chip {sev}">{_esc(f.severity)}</span>
     <span class="rule-id">{_esc(f.id)}</span>{tool}{threat}{cite}{conf}
     <span class="loc">{_esc(f.location or "")}</span>
   </div>
