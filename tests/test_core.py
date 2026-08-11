@@ -85,3 +85,31 @@ def test_generated_at_is_iso_utc(tmp_path):
     write(tmp_path, "server.py", CLEAN)
     report = audit(str(tmp_path))
     assert report.generated_at.endswith("Z")
+
+
+# --- "not analyzed" is not "clean" -------------------------------------------
+
+
+def _message_for(files):
+    from mcp_auditor.core import _not_analyzed_message
+    return _not_analyzed_message(files)
+
+
+def test_unparsed_language_is_named_instead_of_denying_it_is_a_server():
+    """A PHP repo used to report "does not appear to be an MCP server", which
+    reads as a pass. The language is inferred from the manifest, because the
+    loader filters the source files out before extraction ever runs."""
+    msg = _message_for({"composer.json": "{}", "README.md": "# x"})
+    assert "PHP" in msg
+    assert "NOT analyzed" in msg and "not a clean result" in msg
+
+
+def test_message_never_claims_the_target_is_fine():
+    for files in ({"composer.json": "{}"}, {"app.py": "print(1)"}, {}):
+        msg = _message_for(files)
+        assert "not a clean result" in msg
+        assert "tools/list" in msg
+
+
+def test_plain_non_mcp_project_does_not_invent_a_language():
+    assert "looks like a" not in _message_for({"app.py": "print(1)"})

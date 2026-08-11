@@ -76,10 +76,29 @@ mcp-audit matrix tools.json         --connector "Google MCP" --out matrix.xlsx
 mcp-audit matrix https://github.com/owner/repo --format csv --out matrix.csv
 ```
 
-### Where the operations come from
+### Getting the table — pick your starting point
 
-Anything the extractor already reads: a **saved `tools/list` response**, a JSON
-manifest, a local path, or a GitHub URL.
+| You have | Do this |
+|---|---|
+| A repo in Python or TS/JS | `mcp-audit matrix <path-or-github-url> --out matrix.xlsx` |
+| A **running** server | Save its `tools/list` response → `mcp-audit matrix tools.json …` |
+| Only a **docs page** | Turn the docs into `tools.json` (below), then the same command |
+| A repo in PHP, Go, Rust, Java… | Not statically parseable — use the `tools/list` or docs route |
+
+**1 — from a repo.** Works when the tools are declared in code the extractor
+reads:
+
+```bash
+mcp-audit matrix https://github.com/owner/repo --connector "Their MCP" --out matrix.xlsx
+```
+
+If the repo is in a language that is not parsed, the audit says so explicitly
+and tells you it was **not analyzed** — it never reports an unscanned target as
+clean.
+
+**2 — from a running server.** The most reliable source, because it is the tool
+list the agent actually sees. Save the `tools/list` JSON-RPC response (or write
+it by hand) as:
 
 ```json
 {"tools": [
@@ -88,12 +107,29 @@ manifest, a local path, or a GitHub URL.
 ]}
 ```
 
-The connector is never started. A **hosted** server with no public source has to
-have its tool list supplied as JSON — the command says so rather than silently
-emitting an empty matrix. Facade tools that hide many operations behind one MCP
-tool expand to one row each, but only from a literal `enum` in the schema:
-inventing operations a schema does not list would put unverifiable rows in front
-of a review board.
+```bash
+mcp-audit matrix tools.json --connector "WordPress.com MCP" --out matrix.xlsx
+```
+
+**3 — from a documentation page.** Hosted connectors often have no public source
+at all; their tool reference page is the only catalogue. Reading that page is a
+model's job, not the CLI's — `mcp-audit` is deterministic and makes no LLM calls,
+which is what makes its output reproducible. So ask an agent to do the reading
+step and hand the result back to the CLI:
+
+> Read `<docs URL>` and list every tool and operation with its exact name and
+> one-line description. Write them to `tools.json` in the shape above, then run
+> `mcp-audit matrix tools.json --connector "<name>" --out matrix.xlsx`.
+
+The `vetting-mcp-servers` skill in `skills/` carries this workflow. Verify the
+extracted list against the page before the matrix goes to a review board: a
+docs page can lag the deployed server, and a silently missing row is a tool
+nobody reviewed.
+
+**The connector is never started** on any of these paths. Facade tools that hide
+many operations behind one MCP tool expand to one row each, but only from a
+literal `enum` in the schema — inventing operations a schema does not list would
+put unverifiable rows in front of a review board.
 
 ### The three labels
 

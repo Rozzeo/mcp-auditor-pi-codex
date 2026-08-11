@@ -38,9 +38,21 @@ A verdict has these parts, in this order:
 When the decision goes to a review board rather than stopping with you, the
 verdict is a table, not a paragraph: `mcp-audit matrix` emits one row per
 operation with its access type, so each one is approved or refused
-individually instead of the connector being waved through as a whole. A hosted
-connector has no source to read — save its `tools/list` response and pass that
-file as the target.
+individually instead of the connector being waved through as a whole.
+
+**When there is no source to read** — a hosted connector, or one written in a
+language the extractor does not parse — build the tool list yourself and hand
+it to the CLI:
+
+1. Read the connector's `tools/list` response, or its documentation page.
+2. Write `{"tools": [{"name": …, "description": …}, …]}` to a file.
+3. `mcp-audit matrix tools.json --connector "<name>" --out matrix.xlsx`
+
+Doing the reading step yourself is the point: the CLI is deterministic and
+makes no model calls, so its half of the output stays reproducible. Check the
+list you extracted against the source before the matrix goes to review — a docs
+page can lag the deployed server, and a row you missed is a tool nobody
+reviewed. Say which source you used and when it was published.
 
 ## Severity is impact; confidence is how sure the pattern is
 
