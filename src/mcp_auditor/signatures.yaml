@@ -8,8 +8,8 @@
 #
 # `version` is bumped (in lockstep with threats.yaml) whenever the set changes so
 # audits are reproducible against a known rule version (antivirus-style).
-version: 7
-released: "2026-08-09"
+version: 8
+released: "2026-08-11"
 
 rules:
   # --- Tool poisoning (MCP-T04) --------------------------------------------
@@ -611,3 +611,72 @@ rules:
     boundary_patterns:
       - "\\bRequestStateBoundary\\b"
       - "\\bRequestStateSecurity\\b"
+
+
+  # --- Confused deputy / token relay (MCP-T13) -----------------------------
+  AT-001:
+    confidence: medium
+    category: over_privilege
+    severity: critical
+    threat: MCP-T13
+    source: {ref: mcp-survey, section: "5.3.4"}
+    message: "Tool forwards an inbound caller token to a downstream call without scope or audience narrowing (confused-deputy / token relay)."
+    recommendation: "Do not pass the caller's token through to downstream services. Exchange it for a short-lived, audience-scoped token (OAuth token-exchange / on-behalf-of), or call downstream with the tool's own least-privilege credential."
+    # Structural and deliberately narrow (low false-positive by design). Fires only
+    # when ALL hold in the statically-captured body (never executed):
+    #   (1) an INBOUND token exists вЂ” a token-named schema parameter, or the body
+    #       reads the caller's Authorization header;
+    #   (2) that token is placed into an OUTBOUND request's auth header AND an
+    #       actual send call is present; and
+    #   (3) NO token-exchange / audience / scope-narrowing signal is present.
+    # A tool that authenticates downstream with its OWN service credential (from
+    # env/secret manager, not an inbound token) has no inbound token and stays quiet.
+    inbound_token_params:
+      - "token"
+      - "access_token"
+      - "auth_token"
+      - "bearer"
+      - "bearer_token"
+      - "authorization"
+      - "auth_header"
+      - "credential"
+      - "credentials"
+      - "id_token"
+    inbound_header_patterns:
+      - "headers\\s*(\\.get\\s*\\(|\\[)\\s*[\"']authorization[\"']"
+      - "\\brequest\\.headers\\b"
+      - "\\bget_bearer_token\\b"
+      - "\\bctx\\.(auth|token|bearer)\\b"
+    relay_patterns:
+      - "[\"']authorization[\"']\\s*:\\s*[^,}\\n]*\\b(token|bearer|access_token|auth_token|auth|credential)\\b"
+      - "[\"']?authorization[\"']?\\s*[:=]\\s*f?[\"'`]bearer\\s"
+      - "bearer\\s+[\"'`]?\\{?\\s*(token|access_token|auth_token|bearer)\\b"
+      - "headers\\s*\\[\\s*[\"']authorization[\"']\\s*\\]\\s*=\\s*[^\\n]*\\b(token|bearer|access_token|auth)"
+    send_patterns:
+      - "requests\\.(get|post|put|patch|delete)\\s*\\("
+      - "httpx\\.(get|post|put|patch|delete|request)\\b"
+      - "urllib\\.request|urlopen\\s*\\("
+      - "aiohttp|session\\.(get|post|put|request)\\s*\\("
+      - "fetch\\s*\\("
+      - "axios(\\.(get|post|put|patch|delete))?\\s*\\("
+    # Any of these means the token is being exchanged / validated / narrowed, so
+    # the forward is NOT a confused deputy -> the rule stays silent.
+    scoping_patterns:
+      - "token[_ ]?exchange|exchange[_ ]?token"
+      - "grant_type\\s*[:=]\\s*[\"']?urn:ietf:params:oauth:grant-type:token-exchange"
+      - "on[-_ ]?behalf[-_ ]?of"
+      - "\\baudience\\b|verify_aud|check_audience|assert_audience"
+      - "\\bintrospect(ion)?\\b"
+      - "mint[_ ]?(scoped|downstream|new)?[_ ]?token"
+      - "narrow(ed)?[_ ]?scope|assert_scope|require_scope|check_scope|downscope"
+      - "\\bpaseto\\b"
+
+  # --- Meta / unauthorized access (MCP-T13) --------------------------------
+  ME-001:
+    confidence: high
+    category: meta
+    severity: info
+    threat: MCP-T13
+    source: {ref: mcp-survey, section: "5.3.4"}
+    message: "Tool definitions found but no authentication signal detected (unauthenticated exposure is a known MCP risk)."
+    recommendation: "Add authentication/authorization to the server if it is network-exposed."

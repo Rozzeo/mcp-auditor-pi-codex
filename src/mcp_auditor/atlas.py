@@ -17,6 +17,8 @@ from typing import Any, Optional
 import yaml
 
 _DEFAULT_ATLAS = Path(__file__).with_name("threats.yaml")
+# Public alias: the intel autodraft pipeline writes back to the bundled Atlas.
+DEFAULT_ATLAS_PATH = _DEFAULT_ATLAS
 
 
 def load_atlas(path: str | Path | None = None) -> dict[str, Any]:

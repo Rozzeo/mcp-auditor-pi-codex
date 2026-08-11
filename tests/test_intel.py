@@ -1,6 +1,9 @@
 """Tests for the intel pipeline: offline parsing, dedup, queue, distill."""
 
+from click.testing import CliRunner
+
 from mcp_auditor.atlas import load_atlas
+from mcp_auditor.cli import main
 from mcp_auditor.intel import advisories, arxiv, distill
 from mcp_auditor.intel import queue as q
 from mcp_auditor.intel.model import Candidate
@@ -70,6 +73,46 @@ def test_distill_manual_path_is_offline_by_default():
     res = distill.distill(Candidate("arxiv", "2509.00001", "t", "abstract"))
     assert res["status"] == "manual"
     assert "ident" in res
+
+
+# --- provider auto-selection (Gemini vs Anthropic) ------------------------------
+
+
+def test_pick_provider_prefers_gemini_when_both_keys_set(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
+    assert distill._pick_provider() == "gemini"
+
+
+def test_pick_provider_falls_back_to_anthropic(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
+    assert distill._pick_provider() == "anthropic"
+
+
+def test_pick_provider_defaults_to_gemini_with_no_keys(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert distill._pick_provider() == "gemini"
+
+
+def test_distill_dispatches_to_the_requested_provider(monkeypatch):
+    calls = []
+    monkeypatch.setattr(distill, "_call_gemini", lambda c, m: calls.append(("gemini", m)) or {"status": "drafted"})
+    monkeypatch.setattr(distill, "_call_anthropic", lambda c, m: calls.append(("anthropic", m)) or {"status": "drafted"})
+
+    distill.distill(Candidate("arxiv", "1", "t", "s"), use_llm=True, provider="anthropic")
+    distill.distill(Candidate("arxiv", "2", "t", "s"), use_llm=True, provider="gemini")
+    assert calls == [("anthropic", "claude-opus-4-8"), ("gemini", "gemini-2.5-flash")]
+
+
+def test_distill_model_override_is_respected(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(distill, "_call_gemini", lambda c, m: seen.setdefault("model", m) or {"status": "drafted"})
+    distill.distill(Candidate("arxiv", "3", "t", "s"), use_llm=True, provider="gemini", model="gemini-custom")
+    assert seen["model"] == "gemini-custom"
 
 
 # --- publication-quality ranking ---------------------------------------------
@@ -201,3 +244,214 @@ def test_community_tier_ordering_in_filter():
     pre = Candidate("arxiv", "p", "t", "s", tier="preprint")
     assert filter_by_min_tier([blog, pre], "community") == [blog]
     assert filter_by_min_tier([blog, pre], "ranked") == []
+
+
+# --- autodraft: included/excluded criteria gate + staging output ---------------
+
+from mcp_auditor.intel import autodraft as ad  # noqa: E402
+
+
+def test_autodraft_excludes_community_and_preprint_tiers():
+    blog = Candidate("blog", "b1", "t", "s", tier="community", matched=["mcp server"])
+    preprint = Candidate("arxiv", "p1", "t", "s", tier="preprint", matched=["mcp server"])
+    result = ad.autodraft([blog, preprint], use_llm=True, atlas={"references": [], "threats": []})
+    reasons = {e["ident"]: e["reason"] for e in result.excluded}
+    assert reasons == {"b1": "tier_below_threshold", "p1": "tier_below_threshold"}
+    assert result.included == []
+
+
+def test_autodraft_excludes_already_cited_and_no_keyword():
+    cited = Candidate("arxiv", "2503.23278", "t", "s", tier="top", matched=["mcp server"])
+    unmatched = Candidate("arxiv", "x1", "t", "s", tier="top", matched=[])
+    result = ad.autodraft([cited, unmatched], use_llm=True, atlas=load_atlas())
+    reasons = {e["ident"]: e["reason"] for e in result.excluded}
+    assert reasons["2503.23278"] == "already_in_atlas"
+    assert reasons["x1"] == "no_keyword_match"
+
+
+def test_autodraft_excludes_everything_when_llm_disabled():
+    cand = Candidate("osv", "CVE-2026-9", "t", "s", tier="advisory", matched=["mcp"])
+    result = ad.autodraft([cand], use_llm=False, atlas={"references": [], "threats": []})
+    assert result.included == []
+    assert result.excluded == [{"ident": "CVE-2026-9", "title": "t", "reason": "llm_disabled"}]
+
+
+def test_autodraft_includes_top_tier_candidate_with_llm(monkeypatch):
+    cand = Candidate("arxiv", "2601.99999", "New MCP attack", "abstract", tier="top", matched=["mcp server"])
+
+    def fake_distill(candidate, use_llm=False, cache_dir=None, provider=None, model=None):
+        return {
+            "status": "drafted",
+            "ident": candidate.ident,
+            "threat_name": "Fake Attack",
+            "lifecycle_phase": "runtime_execution",
+            "static_signals": ["suspicious pattern X"],
+            "draft_patterns": ["regex-for-x"],
+        }
+
+    monkeypatch.setattr(ad, "distill", fake_distill)
+    result = ad.autodraft([cand], use_llm=True, atlas={"references": [], "threats": []})
+    assert result.excluded == []
+    (draft,) = result.included
+    assert draft["status"] == "auto-drafted" and draft["needs_review"] is True
+    assert draft["name"] == "Fake Attack"
+    assert draft["source"]["ident"] == "2601.99999"
+
+
+def test_autodraft_flags_malformed_and_empty_llm_output(monkeypatch):
+    malformed = Candidate("arxiv", "m1", "t", "s", tier="top", matched=["mcp"])
+    empty = Candidate("arxiv", "e1", "t", "s", tier="top", matched=["mcp"])
+
+    def fake_distill(candidate, use_llm=False, cache_dir=None, provider=None, model=None):
+        if candidate.ident == "m1":
+            return {"raw": "not json", "status": "drafted", "ident": "m1"}
+        return {"status": "drafted", "ident": "e1", "static_signals": [], "draft_patterns": []}
+
+    monkeypatch.setattr(ad, "distill", fake_distill)
+    result = ad.autodraft([malformed, empty], use_llm=True, atlas={"references": [], "threats": []})
+    reasons = {e["ident"]: e["reason"] for e in result.excluded}
+    assert reasons["m1"] == "malformed_llm_output"
+    assert reasons["e1"] == "nothing_statically_detectable"
+
+
+def test_write_drafts_roundtrips_yaml(tmp_path):
+    path = tmp_path / "drafts" / "threats.draft.yaml"
+    drafts = [{"id": "AUTO-X1", "name": "Test", "needs_review": True}]
+    ad.write_drafts(str(path), drafts)
+    import yaml
+
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert loaded == {"drafts": drafts}
+
+
+_ATLAS_FIXTURE = '''# =============================================================================
+# Hand-written header comment that a full YAML round-trip would destroy.
+# =============================================================================
+version: 5
+released: "2026-07-26"
+
+references:
+  - key: mcp-survey
+    type: paper
+    title: "Example survey"
+
+threats:
+  # --- Creation phase --------------------------------------------------------
+  - id: MCP-T01
+    name: "Existing threat"
+    severity: high
+    summary: "An existing, human-curated entry."
+    static_detectability: "partial"
+    rules: ["ME-001"]
+    sources:
+      - {ref: mcp-survey, section: "1.1"}
+'''
+
+
+def test_merge_into_atlas_appends_bumps_version_and_preserves_comments(tmp_path):
+    path = tmp_path / "threats.yaml"
+    path.write_text(_ATLAS_FIXTURE, encoding="utf-8")
+
+    drafts = [
+        {
+            "id": "AUTO-ARXIV-2601-99999",
+            "name": "Fake Auto Threat",
+            "summary": "A fake auto-drafted threat for testing.",
+            "lifecycle": "runtime_execution",
+            "static_signals": ["suspicious pattern X"],
+            "draft_patterns": ["regex-for-x"],
+            "source": {
+                "source": "arxiv", "ident": "2601.99999", "title": "New MCP attack",
+                "url": "https://arxiv.org/abs/2601.99999", "venue": "NDSS", "tier": "top",
+            },
+        }
+    ]
+    n = ad.merge_into_atlas(drafts, atlas_path=str(path))
+    assert n == 1
+
+    text = path.read_text(encoding="utf-8")
+    assert "Hand-written header comment that a full YAML round-trip would destroy." in text
+    assert "version: 6" in text
+    import datetime
+
+    assert f'released: "{datetime.date.today().isoformat()}"' in text
+
+    import yaml
+
+    loaded = yaml.safe_load(text)
+    assert loaded["version"] == 6
+    ids = {t["id"] for t in loaded["threats"]}
+    assert {"MCP-T01", "AUTO-ARXIV-2601-99999"} == ids
+    new = next(t for t in loaded["threats"] if t["id"] == "AUTO-ARXIV-2601-99999")
+    assert new["rules"] == []
+    assert new["needs_review"] is True
+    assert new["static_signals"] == ["suspicious pattern X"]
+
+
+def test_merge_into_atlas_noop_on_empty_drafts(tmp_path):
+    path = tmp_path / "threats.yaml"
+    path.write_text(_ATLAS_FIXTURE, encoding="utf-8")
+    n = ad.merge_into_atlas([], atlas_path=str(path))
+    assert n == 0
+    assert path.read_text(encoding="utf-8") == _ATLAS_FIXTURE
+
+
+# --- LLM-free human curation path -----------------------------------------------
+
+
+def test_build_human_draft_is_needs_review_false():
+    cand = Candidate("blog", "https://blog.example/x", "Cool MCP attack post",
+                      "long summary text", url="https://blog.example/x",
+                      venue="Example Blog", tier="community", matched=["mcp server"])
+    draft = ad.build_human_draft(cand, name="Blog Attack", lifecycle="operation", static_signal="weird pattern")
+    assert draft["status"] == "human-curated"
+    assert draft["needs_review"] is False
+    assert draft["id"] == "HUMAN-HTTPS-BLOG-EXAMPLE-X"
+    assert draft["static_signals"] == ["weird pattern"]
+    assert draft["source"]["tier"] == "community"
+
+
+def test_human_curated_entry_merges_without_review_badge(tmp_path):
+    path = tmp_path / "threats.yaml"
+    path.write_text(_ATLAS_FIXTURE, encoding="utf-8")
+    cand = Candidate("hn", "hn-1", "Neat MCP finding", "summary", url="https://news.ycombinator.com/item?id=1",
+                      venue="Hacker News", tier="community", matched=["mcp server"])
+    draft = ad.build_human_draft(cand, name="HN Finding", lifecycle="operation")
+    ad.merge_into_atlas([draft], atlas_path=str(path))
+
+    import yaml
+
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    new = next(t for t in loaded["threats"] if t["id"] == "HUMAN-HN-1")
+    assert new["status"] == "human-curated"
+    assert new["needs_review"] is False
+    assert new["rules"] == []
+
+
+def test_cli_intel_curate_approve_then_skip(tmp_path):
+    atlas_path = tmp_path / "threats.yaml"
+    atlas_path.write_text(_ATLAS_FIXTURE, encoding="utf-8")
+    queue_path = tmp_path / "queue.jsonl"
+    q.save_queue(str(queue_path), [
+        Candidate("hn", "hn-1", "First finding", "summary one", tier="community", matched=["mcp"]),
+        Candidate("hn", "hn-2", "Second finding", "summary two", tier="community", matched=["mcp"]),
+    ])
+
+    # candidate 1: approve, accept default name/lifecycle, skip static signal.
+    # candidate 2: decline.
+    result = CliRunner().invoke(
+        main,
+        ["intel", "curate", "--queue", str(queue_path), "--atlas", str(atlas_path)],
+        input="y\n\n\n\nn\n",
+    )
+    assert result.exit_code == 0, result.output
+
+    import yaml
+
+    loaded = yaml.safe_load(atlas_path.read_text(encoding="utf-8"))
+    ids = {t["id"] for t in loaded["threats"]}
+    assert "HUMAN-HN-1" in ids
+    assert "HUMAN-HN-2" not in ids
+
+    left = q.load_queue(str(queue_path))
+    assert left == []  # both candidates were decided (one merged, one declined)
