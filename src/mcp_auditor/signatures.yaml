@@ -624,7 +624,7 @@ rules:
     recommendation: "Do not pass the caller's token through to downstream services. Exchange it for a short-lived, audience-scoped token (OAuth token-exchange / on-behalf-of), or call downstream with the tool's own least-privilege credential."
     # Structural and deliberately narrow (low false-positive by design). Fires only
     # when ALL hold in the statically-captured body (never executed):
-    #   (1) an INBOUND token exists вЂ” a token-named schema parameter, or the body
+    #   (1) an INBOUND token exists — a token-named schema parameter, or the body
     #       reads the caller's Authorization header;
     #   (2) that token is placed into an OUTBOUND request's auth header AND an
     #       actual send call is present; and

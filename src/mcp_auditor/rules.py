@@ -617,9 +617,9 @@ def _at001(tool: Tool, rule: dict) -> list[Finding]:
     """Confused deputy / token relay (MCP-T13): an inbound caller token is
     forwarded to a downstream call without scope/audience narrowing.
 
-    Deliberately narrow to keep false positives near zero вЂ” a genuine relay is
+    Deliberately narrow to keep false positives near zero — a genuine relay is
     rare in a well-built server. Requires, in the statically-captured body only
-    (never executed): (1) an inbound token вЂ” a token-named schema parameter or a
+    (never executed): (1) an inbound token — a token-named schema parameter or a
     read of the caller's Authorization header; (2) that token placed into an
     OUTBOUND request's auth header beside a real send call; and (3) NO
     token-exchange / audience / scope-narrowing signal. A tool that authenticates
@@ -630,7 +630,7 @@ def _at001(tool: Tool, rule: dict) -> list[Finding]:
         return []
 
     # (3) A proper exchange / audience / scope check means this is not a confused
-    # deputy вЂ” bail before any relay matching so mitigated tools stay silent.
+    # deputy — bail before any relay matching so mitigated tools stay silent.
     if _first_match(rule.get("scoping_patterns", []), body):
         return []
 
