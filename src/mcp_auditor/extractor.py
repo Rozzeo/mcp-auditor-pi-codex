@@ -1,8 +1,8 @@
 """Static extractor (spec §5).
 
 Finds MCP tool definitions by *parsing*, never by running the target. Python is
-parsed with the `ast` module; TypeScript/JS and JSON manifests are parsed with
-robust text/JSON scanning. The target module is never imported.
+parsed with the `ast` module; WordPress/PHP, TypeScript/JS and JSON manifests
+are parsed with robust text/JSON scanning. The target module is never imported.
 
 Every shape normalizes into the uniform `Tool` list.
 """
@@ -33,6 +33,7 @@ _PY_MCP_IMPORT = re.compile(r"^\s*(from|import)\s+mcp(\.|\s|$)", re.MULTILINE)
 _PY_FASTMCP = re.compile(r"\b(FastMCP|MCPServer)\b")
 _TS_MCP_IMPORT = re.compile(r"""@modelcontextprotocol/(?:sdk|server)""")
 _PY_EXT = (".py",)
+_PHP_EXT = (".php",)
 _TS_EXT = (".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx")
 _JSON_EXT = (".json",)
 
@@ -58,11 +59,18 @@ def extract(files: dict[str, str]) -> ExtractionResult:
     tools: list[Tool] = []
     sdk_detected = False
 
+    php_mcp_repo = _php_repo_uses_mcp(files)
+    sdk_detected = sdk_detected or php_mcp_repo
+
     for path, text in files.items():
         lower = path.lower()
         try:
             if lower.endswith(_PY_EXT):
                 seen_sdk, found = _extract_python(path, text)
+                sdk_detected = sdk_detected or seen_sdk
+                tools.extend(found)
+            elif lower.endswith(_PHP_EXT):
+                seen_sdk, found = _extract_php(path, text, repository_mcp=php_mcp_repo)
                 sdk_detected = sdk_detected or seen_sdk
                 tools.extend(found)
             elif lower.endswith(_TS_EXT):
@@ -88,6 +96,184 @@ def extract(files: dict[str, str]) -> ExtractionResult:
         sdk_detected=sdk_detected,
         skills_detected=bool(skills),
     )
+
+
+# --- WordPress / PHP -------------------------------------------------------
+
+_PHP_ABILITY_CALL = re.compile(r"\bwp_register_ability\s*\(", re.IGNORECASE)
+_PHP_MCP_REPO_SIGNALS = (
+    "wordpress/mcp-adapter",
+    "wordpress/php-mcp-schema",
+    "wp\\mcp\\",
+    "mcp_adapter",
+)
+_PHP_SCHEMA_RESERVED = {
+    "type", "properties", "required", "description", "title", "default",
+    "items", "enum", "minimum", "maximum", "format", "pattern",
+    "additionalproperties",
+}
+
+
+def _php_repo_uses_mcp(files: dict[str, str]) -> bool:
+    """Recognize an adapter repo without treating every WordPress ability as MCP.
+
+    `wp_register_ability` belongs to WordPress itself. It only becomes an MCP
+    surface when the repository depends on/implements the adapter, or when the
+    individual ability explicitly opts into MCP exposure.
+    """
+    for text in files.values():
+        lower = text.lower()
+        if any(signal in lower for signal in _PHP_MCP_REPO_SIGNALS):
+            return True
+    return False
+
+
+def _extract_php(path: str, text: str, *, repository_mcp: bool) -> tuple[bool, list[Tool]]:
+    tools: list[Tool] = []
+    saw_ability = False
+
+    # Registration calls in PHPUnit fixtures exercise the adapter but are not
+    # part of the deployed server surface. Counting them produces a plausible,
+    # dangerously inflated approval matrix.
+    path_parts = {part.lower() for part in path.replace("\\", "/").split("/")[:-1]}
+    if path_parts.intersection({"test", "tests", "fixture", "fixtures"}):
+        return repository_mcp, []
+
+    for match in _PHP_ABILITY_CALL.finditer(text):
+        open_paren = text.find("(", match.start())
+        call = _balanced_delimited(text, open_paren, "(", ")")
+        if not call:
+            continue
+        saw_ability = True
+
+        name_match = re.match(r"\(\s*(['\"])(.*?)\1\s*,", call, re.DOTALL)
+        if not name_match:
+            continue
+
+        meta = _php_value_for_key(call, "meta")
+        mcp_meta = _php_value_for_key(meta, "mcp") if meta else ""
+        explicitly_public = (
+            _php_bool_for_key(mcp_meta, "public") is True
+            or _php_bool_for_key(meta, "public") is True
+        )
+        ability_type = _php_string_for_key(mcp_meta, "type") or "tool"
+        if (not repository_mcp and not explicitly_public) or ability_type != "tool":
+            continue
+
+        raw_name = name_match.group(2)
+        line = text.count("\n", 0, match.start()) + 1
+        tools.append(
+            Tool(
+                name=_sanitize_mcp_name(raw_name),
+                description=_php_string_for_key(call, "description") or "",
+                schema=_php_input_schema(call),
+                location=f"{path}:{line}",
+                body=call,
+                annotations=_php_annotations(call),
+            )
+        )
+
+    return repository_mcp or saw_ability and bool(tools), tools
+
+
+def _sanitize_mcp_name(name: str) -> str:
+    """Mirror the adapter's observable slash-to-hyphen name normalization."""
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", name.strip())
+
+
+def _php_value_for_key(container: str, key: str) -> str:
+    if not container:
+        return ""
+    marker = re.search(rf"(['\"]){re.escape(key)}\1\s*=>\s*", container, re.IGNORECASE)
+    if not marker:
+        return ""
+    pos = marker.end()
+    while pos < len(container) and container[pos].isspace():
+        pos += 1
+    if container[pos:pos + 5].lower() == "array":
+        opener = container.find("(", pos + 5)
+        return _balanced_delimited(container, opener, "(", ")") if opener != -1 else ""
+    if pos < len(container) and container[pos] == "[":
+        return _balanced_delimited(container, pos, "[", "]")
+    if pos < len(container) and container[pos] in ("'", '"'):
+        quote = container[pos]
+        escaped = False
+        for end in range(pos + 1, len(container)):
+            ch = container[end]
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                return container[pos:end + 1]
+        return ""
+    end = container.find(",", pos)
+    return container[pos:end if end != -1 else len(container)].strip()
+
+
+def _php_string_for_key(container: str, key: str) -> str | None:
+    value = _php_value_for_key(container, key)
+    if len(value) < 2 or value[0] not in ("'", '"') or value[-1] != value[0]:
+        return None
+    return value[1:-1].replace("\\'", "'").replace('\\"', '"')
+
+
+def _php_bool_for_key(container: str, key: str) -> bool | None:
+    if not container:
+        return None
+    marker = re.search(
+        rf"(['\"]){re.escape(key)}\1\s*=>\s*(true|false)\b",
+        container,
+        re.IGNORECASE,
+    )
+    if marker:
+        return marker.group(2).lower() == "true"
+    return None
+
+
+def _php_input_schema(call: str) -> dict:
+    schema_block = _php_value_for_key(call, "input_schema")
+    if not schema_block:
+        return {}
+    properties_block = _php_value_for_key(schema_block, "properties")
+    properties: dict[str, dict] = {}
+    if properties_block:
+        for match in re.finditer(r"(['\"])([A-Za-z_][A-Za-z0-9_.-]*)\1\s*=>", properties_block):
+            name = match.group(2)
+            if name.lower() in _PHP_SCHEMA_RESERVED:
+                continue
+            value = _php_value_for_key(properties_block, name)
+            prop_type = _php_string_for_key(value, "type")
+            properties.setdefault(name, {"type": prop_type} if prop_type else {})
+
+    schema: dict = {"type": _php_string_for_key(schema_block, "type") or "object"}
+    if properties:
+        schema["properties"] = properties
+    required_block = _php_value_for_key(schema_block, "required")
+    if required_block:
+        required = [
+            value
+            for _quote, value in re.findall(r"(['\"])([A-Za-z_][A-Za-z0-9_.-]*)\1", required_block)
+        ]
+        if required:
+            schema["required"] = required
+    return schema
+
+
+def _php_annotations(call: str) -> dict:
+    block = _php_value_for_key(call, "annotations")
+    mapping = {
+        "readonly": "readOnlyHint",
+        "destructive": "destructiveHint",
+        "idempotent": "idempotentHint",
+        "open_world": "openWorldHint",
+    }
+    out: dict[str, bool] = {}
+    for php_name, mcp_name in mapping.items():
+        value = _php_bool_for_key(block, php_name)
+        if value is not None:
+            out[mcp_name] = value
+    return out
 
 
 # --- Agent skills (SKILL.md) ------------------------------------------------

@@ -67,6 +67,21 @@ def test_audit_report_json_roundtrips(tmp_path):
     parsed = json.loads(blob)
     assert parsed["is_mcp_server"] is True
     assert parsed["tools_analyzed"] == 1
+    assert parsed["evidence_type"] == "source"
+
+
+def test_declared_and_runtime_manifests_keep_distinct_evidence_types(tmp_path):
+    declared = write(tmp_path, "declared.json", json.dumps({
+        "_source": "https://vendor.example/docs",
+        "tools": [{"name": "search", "description": "Search records."}],
+    }))
+    assert audit(str(declared)).evidence_type == "declared"
+
+    runtime = write(tmp_path, "runtime.json", json.dumps({
+        "capture_kind": "wordpress-runtime",
+        "tools": [{"name": "search", "description": "Search records."}],
+    }))
+    assert audit(str(runtime)).evidence_type == "runtime"
 
 
 def test_single_file_target(tmp_path):

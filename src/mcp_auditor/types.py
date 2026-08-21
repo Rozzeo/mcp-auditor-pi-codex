@@ -152,6 +152,9 @@ class AuditReport:
     score: Optional[int]
     findings: list[Finding]
     generated_at: str
+    # Evidence is explicit so a declared docs inventory, static source scan and
+    # runtime capture can never be mistaken for equivalent assurance.
+    evidence_type: str = "source"
     message: Optional[str] = None
     # The signature-set version this audit ran against (added in v2), so audits
     # are reproducible/pinnable like antivirus definitions. Omitted when unset.
@@ -180,6 +183,7 @@ class AuditReport:
             "findings": [f.to_dict() for f in self.findings],
             "summary": self.summary(),
             "generated_at": self.generated_at,
+            "evidence_type": self.evidence_type,
         }
         if self.message is not None:
             out["message"] = self.message

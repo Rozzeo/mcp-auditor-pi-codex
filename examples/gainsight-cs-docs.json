@@ -1,0 +1,107 @@
+{
+  "_source": "https://support.gainsight.com/gainsight_nxt/AI_Assistants/MCP_Integration/Admin_Guide/Set_Up_Gainsight_CS_MCP_Server_Integration",
+  "evidence_type": "declared",
+  "connector": "Gainsight CS MCP",
+  "tools": [
+    {
+      "name": "Detailed Account Summary",
+      "description": "Retrieve a detailed account summary. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "Query Company and Relationship",
+      "description": "Query company and relationship data. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "Fetch CTAs for a company",
+      "description": "Fetch calls to action for a company. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "Read Tasks in CTA",
+      "description": "Read tasks within a CTA. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "Fetch Success Plans",
+      "description": "Fetch success plans. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "Read Timeline activities",
+      "description": "Read timeline activities. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "Scorecards ( read only)",
+      "description": "Read scorecards. Declared read-only and supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "Cross-account analysis",
+      "description": "Perform cross-account analysis. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "Reports(that users can see in UI)",
+      "description": "Read reports visible to the authenticated user in the UI. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "Query Portfolio Data(GS Home filters)",
+      "description": "Query portfolio data using GS Home filters. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "End User Contact Search",
+      "description": "Search end-user contacts. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": true }
+    },
+    {
+      "name": "Create CTAs",
+      "description": "Create calls to action. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false }
+    },
+    {
+      "name": "Update CTAs",
+      "description": "Update calls to action. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false }
+    },
+    {
+      "name": "Create Tasks in CTAs",
+      "description": "Create tasks within calls to action. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false }
+    },
+    {
+      "name": "Create Success Plans",
+      "description": "Create success plans. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false }
+    },
+    {
+      "name": "Update Success Plans",
+      "description": "Update success plans. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false }
+    },
+    {
+      "name": "Create Timeline Activities",
+      "description": "Create timeline activities at company, success plan, CTA, or relationship level. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false }
+    },
+    {
+      "name": "Update Timeline Activites",
+      "description": "Update timeline activities at company, success plan, CTA, or relationship level. Declared supported by the Gainsight admin guide.",
+      "annotations": { "readOnlyHint": false, "destructiveHint": false }
+    }
+  ],
+  "not_supported": [
+    "Delete records",
+    "Update company fields",
+    "Admin-level configuration",
+    "Scorecard writes"
+  ],
+  "limitations": [
+    "The guide lists business capabilities, not exact MCP tools/list names or JSON Schemas.",
+    "Actual availability depends on OAuth identity and the deployed tenant configuration."
+  ]
+}

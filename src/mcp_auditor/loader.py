@@ -19,6 +19,7 @@ MAX_TOTAL_BYTES = 25_000_000
 # audited (agent skills are the same trust surface as MCP tools).
 RELEVANT_EXT = (
     ".py",
+    ".php",
     ".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx",
     ".json",
     ".md", ".mdx",

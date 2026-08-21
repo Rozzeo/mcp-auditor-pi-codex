@@ -138,6 +138,7 @@ def render_human(report: AuditReport, console: Console | None = None) -> None:
     )
     console.print(counts)
     console.print(f"Tools analyzed: {report.tools_analyzed}", style="dim")
+    console.print(f"Evidence: {report.evidence_type}", style="dim")
 
     capability_rows = [tool for tool in report.tools or [] if tool.capabilities or tool.annotations]
     if capability_rows:

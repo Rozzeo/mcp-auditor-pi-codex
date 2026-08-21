@@ -266,6 +266,11 @@ def _page(report: AuditReport, body: str) -> str:
         if report.signature_version is not None
         else ""
     )
+    evidence_note = {
+        "runtime": "Runtime evidence — discovery metadata was queried; business operations were not executed.",
+        "declared": "Declared evidence — operation names came from documentation, not a deployed server.",
+        "source": "Source evidence — the target was read as text and never executed.",
+    }.get(report.evidence_type, f"Evidence: {report.evidence_type}")
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -277,7 +282,7 @@ def _page(report: AuditReport, body: str) -> str:
 <body>
 <div class="wrap">
 <header><h1>mcp-audit</h1><span class="target">{_esc(report.target)}</span></header>
-<p class="meta">Static analysis only — the target was read as text and never executed.</p>
+<p class="meta">{_esc(evidence_note)}</p>
 {body}
 <footer>Generated {_esc(report.generated_at)}{sig} · mcp-auditor</footer>
 </div>
