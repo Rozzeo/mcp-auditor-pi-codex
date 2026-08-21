@@ -32,6 +32,106 @@ git clone <repo> && cd mcp-auditor
 pip install -e .
 ```
 
+## Threat Intel -> Atlas -> Encyclopedia
+
+The knowledge system has three layers. They are deliberately separate so that
+fresh links from the internet cannot silently become executable detection
+rules:
+
+```text
+arXiv + OSV/CVE + researcher RSS + Hacker News
+                         |
+                         v
+              mcp-audit intel fetch
+                         |
+                         v
+       ~/.mcp-audit/intel/queue.jsonl     (candidates only)
+                         |
+              human review / curation
+                         |
+                         v
+   threats.yaml (Atlas) + signatures.yaml (detectors)
+                         |
+              mcp-audit intel build-docs
+                         |
+                         v
+            mcp-threat-encyclopedia.html
+```
+
+### Where the knowledge comes from
+
+| Source | What it contributes | Trust level |
+|---|---|---|
+| [arXiv Atom API](https://export.arxiv.org/api/help/api/index.html) | Recent MCP-security papers matching the built-in security query | Preprint unless a reviewed venue is recorded |
+| [OSV.dev](https://osv.dev/) | Published advisories/CVEs for `mcp`, `fastmcp`, and `@modelcontextprotocol/sdk` | Advisory |
+| Researcher RSS/Atom feeds | Embrace The Red, Simon Willison, Invariant Labs, Trail of Bits, and Snyk Labs | Community signal; requires review |
+| [Hacker News Algolia API](https://hn.algolia.com/api) | Very recent MCP-security discussions and research announcements | Community signal; requires review |
+| MCP specification and cited research | Stable definitions, expected protocol behavior, and primary citations | Primary reference |
+
+`mcp-audit intel fetch` performs read-only requests and stores deduplicated
+candidates in the local queue. A candidate is not a rule and does not affect an
+audit until it is reviewed and deliberately merged.
+
+```bash
+mcp-audit intel fetch                 # collect candidates from all sources
+mcp-audit intel review                # inspect the queue without changing Atlas
+mcp-audit intel curate                # interactively approve/reject candidates
+mcp-audit intel build-docs \
+  --out mcp-threat-encyclopedia.html  # render the human-facing encyclopedia
+```
+
+The versioned source of truth is
+[`src/mcp_auditor/threats.yaml`](src/mcp_auditor/threats.yaml). It records each
+`MCP-T##` threat, aliases, lifecycle phase, attacker model, severity, static
+detectability, mitigations, detecting rule IDs, and citations. Detection logic
+lives separately in
+[`src/mcp_auditor/signatures.yaml`](src/mcp_auditor/signatures.yaml). Atlas and
+signature versions move in lockstep so an audit can state exactly which
+knowledge version produced it.
+
+`mcp-audit update` is the distribution path, not the research pipeline. It
+downloads only `threats.yaml` and `signatures.yaml` from the canonical
+repository, validates both files, and places them in the per-user cache. It
+never downloads or executes code.
+
+## How an audit is built
+
+Give `mcp-audit` an open-source MCP repository, local source tree, single file,
+agent skill, or repository of skills. The target is downloaded/read as text and
+is never installed, imported, or executed.
+
+```text
+path / file / GitHub URL
+          |
+          v
+ safe fetch -> source extraction -> signature rules -> Atlas citations
+          |                                              |
+          +---------------- score + findings ------------+
+                                 |
+                 terminal / JSON / styled HTML report
+```
+
+Examples:
+
+```bash
+# Open-source MCP repository -> terminal report + shareable HTML dossier
+mcp-audit https://github.com/owner/open-source-mcp \
+  --html mcp-audit-report.html
+
+# One agent skill, or a whole skills repository
+mcp-audit ./path/to/skill --html skill-audit.html
+mcp-audit ./my-skills-repo --html skills-audit.html
+
+# Machine-readable output or a CI gate
+mcp-audit ./my-server --json
+mcp-audit ./my-server --fail-on high
+```
+
+The HTML report contains the score, severity totals, capability observations,
+evidence, rule IDs, Atlas threat IDs and citations, and prioritized fixes. It
+is a presentation of the same deterministic `AuditReport` returned by the core;
+no second analysis path is involved.
+
 ## Usage
 
 ```bash
