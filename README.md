@@ -152,6 +152,7 @@ mcp-audit diff ./server-v1 ./server-v2     # what changed between two versions (
 mcp-audit ./my-server --policy examples/department-policy.yaml --agent alice-helper
 mcp-audit installed                   # what MCP servers this machine is already wired to
 mcp-audit matrix ./my-server --out matrix.xlsx   # per-operation table for InfoSec review
+mcp-audit wordpress-runtime ./mcp-adapter         # opt-in real WordPress runtime capture
 ```
 
 - **Default (human):** colored terminal output — score, per-severity counts, and
@@ -162,6 +163,21 @@ mcp-audit matrix ./my-server --out matrix.xlsx   # per-operation table for InfoS
   severity exists. Severities: `critical`, `high`, `medium`, `low`, `info`.
 
 For GitHub URLs, set `GITHUB_TOKEN` to raise the API rate limit (optional).
+
+### Three evidence levels — do not confuse them
+
+No single input can prove everything about an MCP server. Every JSON and human
+report therefore carries an explicit `evidence_type`:
+
+| evidence | What it proves | What it cannot prove |
+|---|---|---|
+| `source` | Potential tools, implementation sinks, credentials, annotations and supply-chain signals visible in code | Which tools a deployed server exposes to a particular identity |
+| `declared` | Exact operation names claimed by vendor documentation and verified back against its `_source` page | That the deployed server matches the documentation |
+| `runtime` | Tools, resources, prompts and dynamic WordPress abilities actually visible to the selected account | Hidden implementation code and behavior that discovery metadata does not reveal |
+
+A serious review combines the available layers. Closed-source MCP servers can
+still be reviewed from documentation (`declared`) and a live endpoint
+(`runtime`); they simply cannot receive source-code findings.
 
 ## Connector approval matrix — `mcp-audit matrix`
 
@@ -180,10 +196,10 @@ mcp-audit matrix https://github.com/owner/repo --format csv --out matrix.csv
 
 | You have | Do this |
 |---|---|
-| A repo in Python or TS/JS | `mcp-audit matrix <path-or-github-url> --out matrix.xlsx` |
+| A repo in Python, TS/JS, or a WordPress Adapter PHP project | `mcp-audit matrix <path-or-github-url> --out matrix.xlsx` |
 | A **running** server | Save its `tools/list` response → `mcp-audit matrix tools.json …` |
 | Only a **docs page** | Turn the docs into `tools.json` (below); each name is then checked back against the page |
-| A repo in PHP, Go, Rust, Java… | Not statically parseable — use the `tools/list` or docs route |
+| Another PHP framework, Go, Rust, Java… | Not statically parseable yet — use the runtime or docs route |
 
 **1 — from a repo.** Works when the tools are declared in code the extractor
 reads:
@@ -195,6 +211,25 @@ mcp-audit matrix https://github.com/owner/repo --connector "Their MCP" --out mat
 If the repo is in a language that is not parsed, the audit says so explicitly
 and tells you it was **not analyzed** — it never reports an unscanned target as
 clean.
+
+The WordPress extractor recognizes `wp_register_ability(...)` only when the
+repository uses the official MCP Adapter or the ability explicitly opts into
+MCP exposure. It ignores PHPUnit fixtures and normalizes WordPress names such as
+`mcp-adapter/execute-ability` to the observable MCP name
+`mcp-adapter-execute-ability`.
+
+For the official adapter this works without Docker:
+
+```bash
+mcp-audit matrix https://github.com/wordpress/mcp-adapter \
+  --connector "WordPress MCP Adapter (source)" \
+  --format csv --out matrix.csv
+```
+
+At the reviewed upstream revision this calculates three default façade tools:
+`mcp-adapter-discover-abilities`, `mcp-adapter-get-ability-info`, and
+`mcp-adapter-execute-ability`. That is source evidence, not a claim about every
+ability installed on a particular WordPress site.
 
 **2 — from a running server.** The most reliable source, because it is the tool
 list the agent actually sees. Save the `tools/list` JSON-RPC response (or write
@@ -223,6 +258,23 @@ step and hand the result back to the CLI:
 > `mcp-audit matrix tools.json --connector "<name>" --out matrix.xlsx`.
 
 The `vetting-mcp-servers` skill in `skills/` carries this workflow.
+
+Concrete closed-source example: `examples/gainsight-cs-docs.json` transcribes
+the supported capability tables from Gainsight's MCP admin guide while keeping
+the guide URL in `_source`:
+
+```bash
+mcp-audit matrix examples/gainsight-cs-docs.json \
+  --connector "Gainsight CS MCP (declared)" \
+  --format csv --out gainsight-matrix.csv
+```
+
+The checked example produces 18 vendor-declared operations (11 read, 7 write),
+with 18/18 labels confirmed on the source page. Four capabilities that the
+guide explicitly marks unsupported are retained in `not_supported` and are not
+presented as callable operations. The page does not publish exact `tools/list`
+names or JSON Schemas, so this remains `declared` evidence until a live OAuth
+session supplies runtime evidence.
 
 #### Every transcribed name is checked against its page
 
@@ -270,10 +322,41 @@ Note what this does and does not prove: it confirms the transcription matches
 the page, not that the page matches the deployed server. A docs page can lag,
 and a tool the vendor forgot to document is invisible to both.
 
-**The connector is never started** on any of these paths. Facade tools that hide
+**The `audit` and `matrix` commands never start the connector.** Facade tools that hide
 many operations behind one MCP tool expand to one row each, but only from a
 literal `enum` in the schema — inventing operations a schema does not list would
 put unverifiable rows in front of a review board.
+
+### Real WordPress runtime audit — explicit Docker mode
+
+Use this only when you need the effective surface after WordPress, plugins,
+filters, authentication and `mcp.public` rules have loaded. It is deliberately a
+separate command because it starts code. Docker Desktop/Engine must already be
+running; the command never starts Docker Desktop and never installs dependencies
+silently.
+
+```bash
+git clone https://github.com/wordpress/mcp-adapter
+cd mcp-adapter
+npm install
+composer install
+
+mcp-audit wordpress-runtime . --user admin --out wordpress-runtime.json
+mcp-audit matrix wordpress-runtime.json \
+  --connector "WordPress MCP Adapter (runtime/admin)" \
+  --format csv --out runtime-matrix.csv
+```
+
+The command uses the repository's official `wp-env`, captures `tools/list`,
+`resources/list`, and `prompts/list`, calls the read-only
+`mcp-adapter-discover-abilities` façade, and requests schema metadata through
+`mcp-adapter-get-ability-info`. It never calls the discovered business
+abilities. By default, an environment started by the command is stopped again;
+use `--keep` to leave it running or `--no-start` to inspect an existing wp-env.
+
+The resulting `wordpress-runtime.json` is reusable by both `audit` and `matrix`
+and is labelled `evidence_type: runtime`. Because exposure is identity-dependent,
+repeat the capture for every role whose permissions you intend to approve.
 
 ### The three labels
 

@@ -7,6 +7,7 @@ is a thin wrapper around it. The function never executes target code.
 from __future__ import annotations
 
 import re
+import json
 from datetime import datetime, timezone
 
 from .atlas import load_atlas_safe, resolve_sources
@@ -68,7 +69,8 @@ _LANGUAGE_MANIFESTS = {
 
 _UNSCANNED = (
     "It was NOT analyzed, so this is not a clean result. "
-    "Statically parsed: Python, TypeScript/JavaScript, JSON manifests and SKILL.md. "
+    "Statically parsed: Python, TypeScript/JavaScript, WordPress/PHP abilities, "
+    "JSON manifests and SKILL.md. "
     "For anything else — or for a hosted server, or one whose tools are registered "
     "dynamically at runtime — capture its tools/list response and audit that JSON."
 )
@@ -101,6 +103,25 @@ def _detect_auth_signal(files: dict[str, str]) -> bool:
         if _AUTH_SIGNALS.search(text):
             return True
     return False
+
+
+def _evidence_type(files: dict[str, str]) -> str:
+    """Classify what the input proves; never upgrade docs/source to runtime."""
+    declared = False
+    for path, text in files.items():
+        if not path.lower().endswith(".json"):
+            continue
+        try:
+            data = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if str(data.get("capture_kind", "")).endswith("runtime"):
+            return "runtime"
+        if data.get("_source"):
+            declared = True
+    return "declared" if declared else "source"
 
 
 def audit(
@@ -149,6 +170,7 @@ def audit_detailed(
     extraction = extract(files)
     infer_all(extraction.tools)
     generated_at = _now_iso()
+    evidence_type = _evidence_type(files)
 
     if not extraction.is_mcp_server:
         return (
@@ -159,6 +181,7 @@ def audit_detailed(
                 score=None,
                 findings=[],
                 generated_at=generated_at,
+                evidence_type=evidence_type,
                 message=_not_analyzed_message(files),
             ),
             [],
@@ -209,6 +232,7 @@ def audit_detailed(
             score=score,
             findings=findings,
             generated_at=generated_at,
+            evidence_type=evidence_type,
             signature_version=signatures.get("version"),
             tools=extraction.tools,
             policy=policy_report,

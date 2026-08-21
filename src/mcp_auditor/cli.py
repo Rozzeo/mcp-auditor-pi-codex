@@ -435,6 +435,64 @@ def matrix_cmd(target: str, out_path: str, fmt: str | None, connector: str | Non
     raise SystemExit(0)
 
 
+# --- explicit WordPress runtime audit --------------------------------------
+
+
+@main.command(
+    name="wordpress-runtime",
+    help="Capture and audit the real WordPress MCP surface through Docker/wp-env.",
+)
+@click.argument("project", type=click.Path(exists=True, file_okay=False))
+@click.option("--out", "out_path", default="wordpress-runtime.json", show_default=True,
+              help="Write the reusable runtime capture to this JSON file.")
+@click.option("--user", default="admin", show_default=True,
+              help="WordPress user whose effective MCP permissions are audited.")
+@click.option("--server", default="mcp-adapter-default-server", show_default=True,
+              help="Registered WordPress MCP server ID.")
+@click.option("--no-start", is_flag=True,
+              help="Use an already-running wp-env instead of starting it.")
+@click.option("--keep", is_flag=True,
+              help="Keep wp-env running after a command that started it.")
+def wordpress_runtime_cmd(
+    project: str,
+    out_path: str,
+    user: str,
+    server: str,
+    no_start: bool,
+    keep: bool,
+) -> None:
+    """Runtime evidence is opt-in and isolated from every static command.
+
+    Only discovery/info calls are made. Business abilities are never executed.
+    Docker Desktop/Engine must already be running; this command does not launch
+    the desktop application or install dependencies implicitly.
+    """
+    from .wordpress_runtime import WordPressRuntimeError, capture_wordpress_runtime
+
+    err = Console(stderr=True)
+    try:
+        capture = capture_wordpress_runtime(
+            project,
+            user=user,
+            server=server,
+            start=not no_start,
+            keep=keep,
+        )
+        Path(out_path).write_text(json.dumps(capture, indent=2) + "\n", encoding="utf-8")
+        report = audit(out_path)
+    except (OSError, WordPressRuntimeError, ValueError) as exc:
+        err.print(f"[red]error:[/red] {exc}")
+        raise SystemExit(2)
+
+    render_human(report, Console())
+    err.print(f"[green]Runtime capture written[/green] -> {out_path}")
+    err.print(
+        f"Build the approval matrix with: mcp-audit matrix {out_path} "
+        "--format csv --out runtime-matrix.csv"
+    )
+    raise SystemExit(0)
+
+
 # --- intel group -----------------------------------------------------------
 
 

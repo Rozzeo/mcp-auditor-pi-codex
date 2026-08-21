@@ -7,6 +7,8 @@ to regress against them.
 """
 
 import csv
+import json
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +16,7 @@ from mcp_auditor.matrix import (
     DELETE, READ, WRITE,
     Overrides, build_matrix, classify, expand_facade, summarize, write_csv,
 )
+from mcp_auditor.extractor import extract
 from mcp_auditor.types import Tool
 
 
@@ -143,6 +146,19 @@ def test_no_prefill_leaves_the_human_columns_empty():
 
 def test_summary_counts_by_type():
     assert summarize(build_matrix(_tools(), "Demo")) == {READ: 1, DELETE: 1, WRITE: 1}
+
+
+def test_gainsight_docs_example_keeps_declared_and_unsupported_actions_separate():
+    path = Path(__file__).parents[1] / "examples" / "gainsight-cs-docs.json"
+    text = path.read_text(encoding="utf-8")
+    data = json.loads(text)
+    tools = extract({path.name: text}).tools
+    rows = build_matrix(tools, "Gainsight CS MCP (declared)")
+
+    assert len(tools) == 18
+    assert summarize(rows) == {READ: 11, WRITE: 7}
+    assert data["evidence_type"] == "declared"
+    assert len(data["not_supported"]) == 4
 
 
 def test_csv_export_has_the_expected_header_and_rows(tmp_path):

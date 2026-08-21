@@ -77,6 +77,14 @@ def test_html_report_handles_non_mcp_target():
     assert "Not an MCP server" in html
 
 
+def test_html_report_does_not_label_runtime_capture_as_static():
+    report = _report_with([])
+    report.evidence_type = "runtime"
+    html = render_html(report)
+    assert "Runtime evidence" in html
+    assert "target was read as text and never executed" not in html
+
+
 def test_html_report_end_to_end_on_fixture(tmp_path):
     report = audit(str(FIX / "shell-injection-server"))
     out = tmp_path / "report.html"

@@ -60,6 +60,50 @@ def add(a, b):
     return a + b
 '''
 
+PHP_WORDPRESS_ABILITY = r'''<?php
+wp_register_ability(
+    'mcp-adapter/execute-ability',
+    array(
+        'label' => 'Execute Ability',
+        'description' => 'Execute a public WordPress ability with provided parameters.',
+        'input_schema' => array(
+            'type' => 'object',
+            'properties' => array(
+                'ability_name' => array( 'type' => 'string' ),
+                'parameters' => array( 'type' => 'object' ),
+            ),
+            'required' => array( 'ability_name', 'parameters' ),
+        ),
+        'permission_callback' => array( self::class, 'check_permission' ),
+        'execute_callback' => array( self::class, 'execute' ),
+        'meta' => array(
+            'annotations' => array(
+                'readonly' => false,
+                'destructive' => true,
+                'idempotent' => false,
+            ),
+        ),
+    )
+);
+'''
+
+PHP_PUBLIC_ABILITY = r'''<?php
+wp_register_ability('my-plugin/get-posts', [
+    'label' => 'Get Posts',
+    'description' => 'Retrieve WordPress posts.',
+    'input_schema' => [
+        'type' => 'object',
+        'properties' => [
+            'numberposts' => [ 'type' => 'integer' ],
+        ],
+    ],
+    'meta' => [
+        'mcp' => [ 'public' => true, 'type' => 'tool' ],
+        'annotations' => [ 'readonly' => true, 'destructive' => false ],
+    ],
+]);
+'''
+
 
 def test_detects_python_fastmcp_and_extracts_tools():
     result = extract({"server.py": PY_FASTMCP})
@@ -111,6 +155,52 @@ def test_detects_json_manifest_tools():
 def test_plain_repo_is_not_mcp_server():
     result = extract({"util.py": PLAIN_PYTHON})
     assert result.is_mcp_server is False
+    assert result.tools == []
+
+
+def test_extracts_wordpress_mcp_ability_from_php_adapter_repo():
+    result = extract({
+        "composer.json": '{"name":"wordpress/mcp-adapter"}',
+        "includes/ExecuteAbility.php": PHP_WORDPRESS_ABILITY,
+    })
+
+    assert result.is_mcp_server is True
+    (tool,) = result.tools
+    assert tool.name == "mcp-adapter-execute-ability"
+    assert tool.description.startswith("Execute a public WordPress ability")
+    assert set(tool.schema["properties"]) == {"ability_name", "parameters"}
+    assert tool.annotations == {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+    }
+    assert tool.location.startswith("includes/ExecuteAbility.php:")
+
+
+def test_extracts_explicitly_public_wordpress_mcp_ability_without_adapter_manifest():
+    result = extract({"plugin.php": PHP_PUBLIC_ABILITY})
+
+    assert result.is_mcp_server is True
+    (tool,) = result.tools
+    assert tool.name == "my-plugin-get-posts"
+    assert tool.schema["properties"]["numberposts"]["type"] == "integer"
+    assert tool.annotations["readOnlyHint"] is True
+    assert tool.annotations["destructiveHint"] is False
+
+
+def test_plain_wordpress_ability_is_not_assumed_to_be_mcp_public():
+    source = PHP_PUBLIC_ABILITY.replace("'mcp' => [ 'public' => true, 'type' => 'tool' ],", "")
+    result = extract({"plugin.php": source})
+    assert result.is_mcp_server is False
+    assert result.tools == []
+
+
+def test_wordpress_php_test_fixtures_are_not_counted_as_operations():
+    result = extract({
+        "composer.json": '{"name":"wordpress/mcp-adapter"}',
+        "tests/phpunit/fixtures/ability.php": PHP_WORDPRESS_ABILITY,
+    })
+    assert result.is_mcp_server is True
     assert result.tools == []
 
 
