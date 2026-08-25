@@ -51,6 +51,21 @@ def test_v2_register_tool_extracts_schema_annotations_and_capabilities():
     }
 
 
+def test_official_filesystem_handlers_keep_capabilities_with_their_own_tool():
+    fixture = Path(__file__).parent / "fixtures" / "official-filesystem-register-tools.ts"
+    result = extract({"src/filesystem/index.ts": fixture.read_text(encoding="utf-8")})
+    infer_all(result.tools)
+    tools = {tool.name: tool for tool in result.tools}
+
+    read_media = tools["read_media_file"]
+    move_file = tools["move_file"]
+
+    assert read_media.body.count(".registerTool") == 1
+    assert "fs.rename" not in read_media.body
+    assert "filesystem.delete" not in {item.capability for item in read_media.capabilities}
+    assert "filesystem.delete" in {item.capability for item in move_file.capabilities}
+
+
 def test_annotation_claims_are_checked_against_observed_handler(tmp_path):
     server = tmp_path / "server.ts"
     server.write_text(V2_SERVER, encoding="utf-8")

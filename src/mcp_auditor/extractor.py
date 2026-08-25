@@ -608,31 +608,17 @@ def _extract_typescript(path: str, text: str) -> tuple[bool, list[Tool]]:
 def _ts_call_span(text: str, start: int) -> str:
     """Capture one tool-registration call as text, ending at its balanced `)`.
 
-    String-aware paren matching so a `)` inside a quoted/template literal does
-    not close the call early. Falls back to a capped slice if the call never
-    closes (malformed source).
+    String/comment-aware paren matching so punctuation inside literals and
+    comments cannot open or close the call. Falls back to a capped slice if the
+    call never closes (malformed source).
     """
     open_idx = text.find("(", start)
     if open_idx == -1:
         return text[start: start + _TS_BODY_CAP]
-    depth = 0
-    quote: str | None = None
-    prev = ""
     end_limit = min(len(text), start + _TS_BODY_CAP)
-    for i in range(open_idx, end_limit):
-        ch = text[i]
-        if quote:
-            if ch == quote and prev != "\\":
-                quote = None
-        elif ch in "\"'`":
-            quote = ch
-        elif ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if depth == 0:
-                return text[start: i + 1]
-        prev = ch
+    call = _balanced_delimited(text[:end_limit], open_idx, "(", ")")
+    if call:
+        return text[start:open_idx + len(call)]
     return text[start:end_limit]
 
 
