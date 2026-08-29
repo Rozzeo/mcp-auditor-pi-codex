@@ -21,8 +21,8 @@
 #   rules               signature rule ids that detect this ([] = known gap)
 #   sources             paper sections / CVEs that justify the entry
 # =============================================================================
-version: 8
-released: "2026-08-11"
+version: 9
+released: "2026-08-29"
 
 # Primary source seeded into this Atlas.
 references:
@@ -41,6 +41,94 @@ references:
     url: "https://blog.modelcontextprotocol.io/posts/2026-07-28/"
 
 threats:
+  # --- Cross-format AI extension package safety ----------------------------
+  - id: AIX-T01
+    name: "Published Sensitive Information"
+    aliases: ["PII in package", "sensitive example leakage"]
+    applies_to: [codex_skill, claude_skill, mcp]
+    attacker: security_flaw
+    lifecycle: package_publication
+    phase_group: creation
+    severity: critical
+    summary: >-
+      A published AI extension contains real personal, credential, or company
+      information in its instructions, scripts, references, examples, or assets.
+      Anyone who can download the package receives the data before the extension
+      is ever run.
+    scenario: >-
+      An author copies a realistic employee record or internal example into a
+      skill package and publishes it to a marketplace.
+    preconditions:
+      - "Sensitive information is present in a distributed package file."
+      - "The package is shared with people or systems outside its intended boundary."
+    static_detectability: "partial"
+    static_signals:
+      - "non-placeholder email addresses or government identifiers in package files"
+      - "credentials, tokens, or internal records embedded in examples and references"
+    engine_can_establish:
+      - "which readable package file contains a supported sensitive-data pattern"
+      - "the exact evidence location without reproducing the sensitive value"
+    engine_cannot_establish:
+      - "whether every matched value belongs to a real person"
+      - "whether opaque binary assets contain additional sensitive information"
+    review_questions:
+      - "Is the matched value synthetic and documented as such?"
+      - "Was the package ever published, and must exposed data or credentials be rotated?"
+    safe_example: "Use clearly synthetic records under reserved example domains and label them as test data."
+    risky_example: "A reference CSV contains real employee contact details and is bundled with the marketplace package."
+    rules: ["SP-001"]
+    mitigations:
+      - "Use generated synthetic fixtures and reserved example domains."
+      - "Scan the complete package before publication, including references and assets."
+      - "Remove sensitive history and rotate exposed credentials."
+    sources:
+      - {ref: mcp-survey, section: "5.3.3"}
+
+  - id: AIX-T02
+    name: "Sensitive Data Flow"
+    aliases: ["possible data exfiltration", "source-to-sink flow"]
+    applies_to: [codex_skill, claude_skill, mcp]
+    attacker: malicious_developer
+    lifecycle: external_resource_access
+    phase_group: operation
+    severity: high
+    summary: >-
+      An AI extension can obtain sensitive data and pass it to an external sink
+      such as a network service, subprocess, log, or generated file. Safety
+      depends on the data, destination, controls, and deployment context.
+    scenario: >-
+      A skill instructs the agent to read employee records and invokes a bundled
+      uploader that sends a derived summary to a third-party endpoint.
+    preconditions:
+      - "The extension can access a sensitive-data source."
+      - "A reachable instruction or script exposes a data sink."
+    static_detectability: "partial"
+    static_signals:
+      - "sensitive-data language connected to a referenced network-capable script"
+      - "workspace, CRM, HR, health, financial, credential, or customer data combined with an outbound call"
+    engine_can_establish:
+      - "visible source and sink evidence in the analyzed package"
+      - "a possible connection through explicit package references"
+    engine_cannot_establish:
+      - "the actual runtime data transmitted"
+      - "deployed network controls, destination retention, or contractual safeguards"
+      - "that every possible execution path reaches the sink"
+    review_questions:
+      - "What exact fields can leave the environment?"
+      - "Who controls the destination and is it allowlisted?"
+      - "Can data be minimized or redacted before transmission?"
+      - "Does the user explicitly confirm the transfer?"
+    safe_example: "Send only a redacted aggregate to an organization-approved domain after explicit confirmation."
+    risky_example: "Read broad workspace or employee data and POST it to a third-party endpoint without disclosure."
+    rules: ["SF-001"]
+    mitigations:
+      - "Minimize and redact data before it reaches a sink."
+      - "Allowlist destinations and disclose them in the skill description."
+      - "Require user confirmation for sensitive transfers."
+      - "Run with the narrowest filesystem, connector, and network permissions."
+    sources:
+      - {ref: mcp-survey, section: "5.3.3"}
+
   # --- Creation phase: malicious developer ---------------------------------
   - id: MCP-T01
     name: "Namespace Typosquatting"

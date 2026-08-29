@@ -377,7 +377,7 @@ function render() {
   const box = $("findings");
   renderRecs(findings);
   if (!findings.length) {
-    box.innerHTML = '<div class="clean">✓ No findings. This tool looks clean.</div>';
+    box.innerHTML = '<div class="clean">No supported threat patterns found in this example. This is not a universal safety claim.</div>';
     return;
   }
   box.innerHTML = findings.map(f => `

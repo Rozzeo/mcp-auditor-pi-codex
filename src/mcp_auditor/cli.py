@@ -143,6 +143,329 @@ def audit_cmd(
     raise SystemExit(0)
 
 
+# --- review ------------------------------------------------------------------
+
+
+@main.command(
+    name="review",
+    help="Produce the evidence-backed review packet a security specialist signs.",
+)
+@click.argument("target")
+@click.option("--json", "as_json", is_flag=True,
+              help="Emit the review packet as JSON on stdout (and nothing else).")
+@click.option("--baseline", "baseline_path", type=click.Path(exists=True, dir_okay=False),
+              default=None,
+              help="A previously saved --json audit to diff this review against.")
+@click.option("--signatures", "signatures_path", type=click.Path(exists=True), default=None,
+              help="Path to a custom signatures.yaml (pins the rule version).")
+def review_cmd(
+    target: str,
+    as_json: bool,
+    baseline_path: str | None,
+    signatures_path: str | None,
+) -> None:
+    from .review import build_packet
+
+    err = Console(stderr=True)
+    try:
+        report = audit(target, signatures_path=signatures_path)
+    except Exception as exc:
+        err.print(f"[red]error:[/red] {exc}")
+        raise SystemExit(2)
+
+    baseline = None
+    if baseline_path:
+        try:
+            baseline = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            err.print(f"[red]error:[/red] cannot read baseline {baseline_path}: {exc}")
+            raise SystemExit(2)
+
+    packet = build_packet(report, baseline=baseline)
+    if as_json:
+        sys.stdout.write(json.dumps(packet, indent=2) + "\n")
+        sys.stdout.flush()
+    else:
+        _render_packet(Console(), packet)
+
+    raise SystemExit(0)
+
+
+def _render_packet(console: Console, packet: dict) -> None:
+    """Render the packet as the sheet a reviewer reads top to bottom.
+
+    Coverage is printed before the capability matrix, and the matrix before the
+    findings, because how much was actually parsed decides how much the rest of
+    the sheet is worth.
+    """
+    identity = packet["identity"]
+    console.print(
+        f"[bold]Review packet[/bold]  {identity['target']}\n"
+        f"[dim]{identity['tools_analyzed']} tool(s)  ·  evidence: {identity['evidence_type']}"
+        f"  ·  signatures v{identity['signature_version']}  ·  {identity['generated_at']}[/dim]"
+    )
+
+    coverage = packet["coverage"]
+    roles = ", ".join(f"{count} {role}" for role, count in sorted(coverage["source_roles"].items()))
+    if coverage["complete"]:
+        console.print(f"\n[green]Coverage complete[/green] [dim]({roles})[/dim]")
+    else:
+        console.print(f"\n[yellow]Coverage incomplete[/yellow] [dim]({roles})[/dim]")
+        if coverage["unresolved_registrations"]:
+            console.print(
+                f"  [dim]{coverage['unresolved_registrations']} registration(s) unresolved[/dim]"
+            )
+        if coverage["unresolved_handlers"]:
+            console.print(
+                f"  [dim]handlers not fully followed: "
+                f"{', '.join(coverage['unresolved_handlers'])}[/dim]"
+            )
+    if coverage.get("package_files_total"):
+        console.print(
+            f"[dim]Package files analyzed: {coverage['package_files_analyzed']}/"
+            f"{coverage['package_files_total']}[/dim]"
+        )
+        for gap in coverage.get("package_coverage_gaps", []):
+            console.print(
+                f"  [yellow]unresolved package reference:[/yellow] "
+                f"{gap.get('reference', '?')} — {gap.get('reason', 'unknown')}"
+            )
+
+    if packet["capability_matrix"]:
+        table = Table("Tool", "Capability", "Evidence", "Reference", "Constraint",
+                      title="Capability matrix", show_lines=False, expand=True)
+        for row in packet["capability_matrix"]:
+            colour = {"CONTRADICTED": "red", "UNKNOWN": "yellow"}.get(row["evidence_status"], "green")
+            table.add_row(
+                row["tool"],
+                row["capability"],
+                f"[{colour}]{row['evidence_status']}[/{colour}]",
+                row["evidence_reference"],
+                row["constraint"] or row["notes"] or "-",
+            )
+        console.print(table)
+
+    for contradiction in packet["contradictions"]:
+        console.print(
+            f"[red]Contradiction[/red] {contradiction['tool']}: declared "
+            f"{contradiction['declared']}, implementation shows {contradiction['inferred']} "
+            f"[dim]({contradiction['location']})[/dim]"
+        )
+
+    if packet.get("data_flows"):
+        table = Table(
+            "Source", "Sink", "Status", "Source evidence", "Sink evidence",
+            title="Sensitive data flows", show_lines=False, expand=True,
+        )
+        for flow in packet["data_flows"]:
+            table.add_row(
+                flow["source"],
+                flow["sink"],
+                flow["status"],
+                flow["source_evidence"]["location"],
+                flow["sink_evidence"]["location"],
+            )
+        console.print(table)
+
+    if packet["findings"]:
+        console.print("\n[bold]Evidence-backed findings[/bold]")
+        for finding in packet["findings"]:
+            console.print(
+                f"  [yellow]{finding['id']}[/yellow] {finding['message']} "
+                f"[dim]({finding['location']})[/dim]"
+            )
+            if finding.get("evidence"):
+                console.print(f"    [dim]Evidence:[/dim] {finding['evidence']}")
+            education = finding.get("education") or {}
+            if education:
+                console.print(
+                    f"    [bold]What this means:[/bold] "
+                    f"{education.get('summary', education.get('name', ''))}"
+                )
+                questions = education.get("review_questions") or []
+                if questions:
+                    console.print(f"    [dim]Verify:[/dim] {questions[0]}")
+
+    if packet["questions"]:
+        console.print("\n[bold]Evidence requested from the vendor[/bold]")
+        for index, question in enumerate(packet["questions"], start=1):
+            console.print(f"  {index}. [dim]{question['topic']}[/dim] {question['question']}")
+
+    change = packet["change_report"]
+    if change:
+        console.print("\n[bold]Changes since the baseline[/bold]")
+        for name in change["added"]:
+            console.print(f"  [yellow]+ tool added:[/yellow] {name}")
+        for name in change["removed"]:
+            console.print(f"  [dim]- tool removed: {name}[/dim]")
+        for item in change["capability_changes"]:
+            gained = f"+{', '.join(item['gained'])}" if item["gained"] else ""
+            lost = f"-{', '.join(item['lost'])}" if item["lost"] else ""
+            console.print(f"  [yellow]~ {item['tool']}:[/yellow] {' '.join(filter(None, (gained, lost)))}")
+        if not (change["added"] or change["removed"] or change["capability_changes"]):
+            console.print("  [green]No inventory or capability changes.[/green]")
+
+    assessment = packet.get("assessment") or {}
+    if assessment:
+        verdict = assessment["verdict"]
+        colour = "green" if verdict == "ELIGIBLE_FOR_APPROVAL" else "yellow"
+        if verdict == "REJECT_RECOMMENDED":
+            colour = "red"
+        console.print(
+            f"\n[bold]Contextual assessment:[/bold] [{colour}]{verdict}[/{colour}]\n"
+            f"[dim]{assessment['statement']}[/dim]"
+        )
+
+    decision = packet["decision"]
+    console.print(
+        f"\n[bold]Human decision:[/bold] [yellow]{decision['status']}[/yellow]\n"
+        f"[dim]This packet is advisory. A security specialist records the decision, "
+        f"their name, and their notes.[/dim]"
+    )
+
+
+# --- benchmark ---------------------------------------------------------------
+
+
+@main.command(
+    name="benchmark",
+    help="Evaluate labelled detector decisions and report TP/FP/FN/TN metrics.",
+)
+@click.argument("dataset", type=click.Path(exists=True, dir_okay=False))
+@click.option("--json", "as_json", is_flag=True,
+              help="Emit benchmark results as JSON on stdout.")
+@click.option("--signatures", "signatures_path", type=click.Path(exists=True), default=None,
+              help="Signature file to evaluate; defaults to the effective bundled set.")
+@click.option("--corpus-root", "corpus_root", type=click.Path(), default=None,
+              help="Local checkout of the pinned corpus a validation dataset references "
+                   "(also read from MCP_AUDITOR_CORPUS_ROOT).")
+def benchmark_cmd(
+    dataset: str,
+    as_json: bool,
+    signatures_path: str | None,
+    corpus_root: str | None,
+) -> None:
+    from .benchmark import BenchmarkError, benchmark_failed, evaluate_benchmark
+
+    try:
+        result = evaluate_benchmark(dataset, signatures_path, corpus_root)
+    except (BenchmarkError, FileNotFoundError, ValueError) as exc:
+        Console(stderr=True).print(f"[red]error:[/red] {exc}")
+        raise SystemExit(2)
+
+    if as_json:
+        sys.stdout.write(json.dumps(result, indent=2) + "\n")
+        sys.stdout.flush()
+    else:
+        _render_benchmark(Console(), result)
+
+    raise SystemExit(1 if benchmark_failed(result) else 0)
+
+
+def _render_benchmark(console: Console, result: dict) -> None:
+    """Print the three measurement views, then every unclosed gap.
+
+    Discovery comes first on purpose: a clean rule table over a corpus the
+    extractor never parsed is an incomplete result, not a safe one.
+    """
+    percent = lambda value: "n/a" if value is None else f"{value:.1%}"
+
+    console.print(
+        f"[bold]Benchmark:[/bold] {result['dataset']}  "
+        f"dataset v{result['dataset_version']}  split [bold]{result['split']}[/bold]  "
+        f"signatures v{result['signature_version']}"
+    )
+    if result["purpose"]:
+        console.print(f"[dim]{result['purpose'].strip()}[/dim]")
+
+    corpus = result.get("corpus")
+    if corpus and not corpus["available"]:
+        console.print(
+            f"[red]Pinned corpus unavailable[/red] - {result['unavailable_cases']} case(s) were "
+            f"not evaluated.\n"
+            f"[dim]Check out {corpus['repo']} at {corpus['commit']} and pass "
+            f"--corpus-root (or set MCP_AUDITOR_CORPUS_ROOT).[/dim]"
+        )
+        return
+
+    discovery = result["discovery"]
+    console.print(
+        f"\n[bold]Tool discovery[/bold]  Coverage {percent(discovery['coverage'])} "
+        f"({discovery['matched']}/{discovery['expected']} labelled tools)"
+    )
+    if len(result["per_shape"]) > 1:
+        shapes = Table("Registration shape", "Coverage", "Found", "Missing")
+        for shape, buckets in result["per_shape"].items():
+            found = buckets["discovery"]
+            shapes.add_row(
+                shape,
+                percent(found["coverage"]),
+                f"{found['matched']}/{found['expected']}",
+                str(len(found["missing"])),
+            )
+        console.print(shapes)
+    if discovery["missing"]:
+        console.print(f"[dim]missing: {', '.join(discovery['missing'])}[/dim]")
+    if discovery["unexpected"]:
+        console.print(f"[dim]unlabelled extractions: {', '.join(discovery['unexpected'])}[/dim]")
+
+    for title, headline, rows in (
+        ("Capability classification", result["capability_metrics"], result["per_capability"]),
+        ("Findings", result["metrics"], result["per_rule"]),
+    ):
+        if not headline["tp"] and not headline["fp"] and not headline["fn"] and not headline["tn"]:
+            continue
+        console.print(f"\n[bold]{title}[/bold]")
+        table = Table("", "TP", "FP", "FN", "TN", "Precision", "Recall", "FPR")
+        for label, values in [("ALL", headline), *rows.items()]:
+            table.add_row(
+                label,
+                str(values["tp"]), str(values["fp"]),
+                str(values["fn"]), str(values["tn"]),
+                percent(values["precision"]), percent(values["recall"]),
+                percent(values["false_positive_rate"]),
+            )
+        console.print(table)
+
+    if result["gaps"]:
+        console.print("\n[bold]Known gaps[/bold]")
+        # Printed as lines rather than a table so a long reason can never push
+        # the identifier a reader needs to grep for into a wrapped column, and
+        # grouped by reason so one unsupported registration shape reads as one
+        # gap instead of forty copies of the same sentence.
+        grouped: dict[tuple[str, str, str], list[str]] = {}
+        for gap in result["gaps"]:
+            key = (gap["status"], gap["kind"], " ".join(gap["reason"].split()))
+            # Qualified by case: a repo-level target such as RP-001:None is
+            # otherwise indistinguishable between servers.
+            grouped.setdefault(key, []).append(f"{gap['case']}/{gap['target']}")
+        for (status, kind, reason), targets in grouped.items():
+            colour = "yellow" if status == "open" else "red"
+            console.print(
+                f"  [{colour}]{status}[/{colour}] {kind} x{len(targets)}: "
+                f"{', '.join(targets)}"
+            )
+            console.print(f"    [dim]{reason}[/dim]")
+        if any(gap["status"] == "resolved" for gap in result["gaps"]):
+            console.print(
+                "[red]A resolved gap is still declared in the dataset.[/red] "
+                "[dim]Delete the known_gap entry so real regressions stay visible.[/dim]"
+            )
+
+    unexplained = result["unexplained"]
+    if any(unexplained.values()):
+        console.print(
+            f"\n[red]Unexplained: {unexplained['discovery']} discovery, "
+            f"{unexplained['capabilities']} capability, {unexplained['findings']} finding "
+            f"decision(s).[/red] [dim]Fix the engine, or record a known_gap with a reason.[/dim]"
+        )
+
+    console.print(
+        "\n[dim]Risk scores are reported per case in JSON, but are not used "
+        "as detector-accuracy metrics.[/dim]"
+    )
+
+
 # --- diff --------------------------------------------------------------------
 
 

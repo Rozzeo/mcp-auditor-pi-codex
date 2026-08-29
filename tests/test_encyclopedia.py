@@ -23,3 +23,11 @@ def test_marks_known_gaps_honestly():
     # Installer Spoofing (MCP-T08) is runtime-only — shown as a gap, not a rule.
     assert "Installer Spoofing" in HTML
     assert "known gap" in HTML
+
+
+def test_teaches_reviewers_what_the_engine_can_and_cannot_establish():
+    assert "Sensitive Data Flow" in HTML
+    assert "What the engine can establish" in HTML
+    assert "What it cannot establish" in HTML
+    assert "Reviewer questions" in HTML
+    assert "Safer pattern" in HTML

@@ -15,11 +15,37 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import yaml
+from yaml.constructor import ConstructorError
+from yaml.resolver import BaseResolver
 
 from .capabilities import DESTRUCTIVE_CAPABILITIES, MUTATING_CAPABILITIES
+from .source_roles import deployed_files
 from .types import Finding, Tool
 
 _DEFAULT_SIGNATURES = Path(__file__).with_name("signatures.yaml")
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """Safe YAML loader that refuses silently-shadowed signature keys."""
+
+
+def _construct_unique_mapping(loader, node, deep=False):
+    loader.flatten_mapping(node)
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeyLoader.add_constructor(BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping)
 
 # Codepoints that should never appear in legitimate tool metadata (TP-002).
 _HIDDEN_CHARS = {
@@ -37,8 +63,11 @@ _SECRET_RE = re.compile(
 def load_signatures(path: str | Path | None = None) -> dict[str, Any]:
     """Load the signature set from YAML (defaults to the bundled file)."""
     target = Path(path) if path else _DEFAULT_SIGNATURES
-    with open(target, "r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh)
+    try:
+        with open(target, "r", encoding="utf-8") as fh:
+            data = yaml.load(fh, Loader=_UniqueKeyLoader)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid signature file: {target}: {exc}") from exc
     if not isinstance(data, dict) or "rules" not in data:
         raise ValueError(f"Invalid signature file: {target}")
     return data
@@ -105,16 +134,23 @@ def run_rules(
         findings.extend(_tc001(tools, rules["TC-001"]))
 
     # File-level rules (scan raw source/config text, never execute it).
+    #
+    # CR-001/OP-003/SL-002/SL-003 all describe the *deployed* server: what it
+    # holds, what it binds, what it publishes. A test that constructs a server
+    # to assert on it is not that server, so those four see only the sources
+    # that make up the artifact. RP-001 and TS-001 judge the repository's
+    # manifests instead and keep the whole tree in view.
+    deployed = deployed_files(files)
     if "CR-001" in rules:
-        findings.extend(_cr001(files, rules["CR-001"]))
+        findings.extend(_cr001(deployed, rules["CR-001"]))
     if "OP-003" in rules:
-        findings.extend(_op003(files, has_auth_signal, rules["OP-003"]))
+        findings.extend(_op003(deployed, has_auth_signal, rules["OP-003"]))
     if "RP-001" in rules:
         findings.extend(_rp001(files, rules["RP-001"]))
     if "SL-002" in rules:
-        findings.extend(_sl002(files, rules["SL-002"]))
+        findings.extend(_sl002(deployed, rules["SL-002"]))
     if "SL-003" in rules:
-        findings.extend(_sl003(files, rules["SL-003"]))
+        findings.extend(_sl003(deployed, rules["SL-003"]))
 
     # ME-001 is report-level: fires once if tools exist but no auth was detected.
     if tools and not has_auth_signal:
@@ -263,6 +299,11 @@ def _op002(tool: Tool, rule: dict) -> list[Finding]:
         return []
     dangerous = set(rule.get("dangerous_param_names", []))
     constraint_keys = set(rule.get("constraint_keys", []))
+    path_params = set(rule.get("path_param_names", []))
+    # Schema breadth and effective constraint are different facts. A parameter
+    # the handler resolves through a verified guard is bounded in the way a
+    # reviewer cares about, whatever the schema says it accepts.
+    guarded_kinds = {guard.get("parameter_kind") for guard in tool.guards}
     findings: list[Finding] = []
     for pname, pdef in props.items():
         if pname.lower() not in dangerous:
@@ -271,6 +312,8 @@ def _op002(tool: Tool, rule: dict) -> list[Finding]:
         if pdef.get("type") not in (None, "string"):
             continue
         if constraint_keys & set(pdef.keys()):
+            continue
+        if pname.lower() in path_params and "path" in guarded_kinds:
             continue
         findings.append(_make(rule, "OP-002", tool, f"unconstrained parameter '{pname}'"))
     return findings

@@ -59,6 +59,39 @@ def _threat_card(threat: dict[str, Any], references: dict[str, dict]) -> str:
     )
     signals = "".join(f"<li>{_esc(s)}</li>" for s in threat.get("static_signals", []))
     mitigations = "".join(f"<li>{_esc(m)}</li>" for m in threat.get("mitigations", []))
+    can_establish = "".join(
+        f"<li>{_esc(item)}</li>" for item in threat.get("engine_can_establish", [])
+    )
+    cannot_establish = "".join(
+        f"<li>{_esc(item)}</li>" for item in threat.get("engine_cannot_establish", [])
+    )
+    review_questions = "".join(
+        f"<li>{_esc(item)}</li>" for item in threat.get("review_questions", [])
+    )
+    applies = ", ".join(str(item).replace("_", " ") for item in threat.get("applies_to", []))
+    applicability = f"<span><b>Applies to:</b> {_esc(applies)}</span>" if applies else ""
+    scenario = (
+        f'<div class="lesson"><h4>Scenario</h4><p>{_esc(threat.get("scenario"))}</p></div>'
+        if threat.get("scenario") else ""
+    )
+    evidence_boundary = ""
+    if can_establish or cannot_establish:
+        evidence_boundary = f"""
+        <div class="lesson-grid">
+          <div><h4>What the engine can establish</h4><ul>{can_establish or '<li>—</li>'}</ul></div>
+          <div><h4>What it cannot establish</h4><ul>{cannot_establish or '<li>—</li>'}</ul></div>
+        </div>"""
+    reviewer = (
+        f'<div class="lesson"><h4>Reviewer questions</h4><ol>{review_questions}</ol></div>'
+        if review_questions else ""
+    )
+    examples = ""
+    if threat.get("safe_example") or threat.get("risky_example"):
+        examples = f"""
+        <div class="lesson-grid examples">
+          <div class="safer"><h4>Safer pattern</h4><p>{_esc(threat.get('safe_example', '—'))}</p></div>
+          <div class="riskier"><h4>Risky pattern</h4><p>{_esc(threat.get('risky_example', '—'))}</p></div>
+        </div>"""
 
     sources_rendered = []
     for src in threat.get("sources", []):
@@ -89,9 +122,14 @@ def _threat_card(threat: dict[str, Any], references: dict[str, dict]) -> str:
         <span><b>Attacker:</b> {_esc(threat.get("attacker", "").replace("_", " "))}</span>
         <span><b>Lifecycle:</b> {_esc(threat.get("lifecycle", "").replace("_", " "))}</span>
         <span><b>Detected by:</b> {rules_html}</span>
+        {applicability}
       </div>
       <details>
-        <summary>Static signals &amp; mitigations</summary>
+        <summary>Learn, verify &amp; mitigate</summary>
+        {scenario}
+        {evidence_boundary}
+        {reviewer}
+        {examples}
         <div class="cols">
           <div><h4>Static signals</h4><ul>{signals or "<li>—</li>"}</ul></div>
           <div><h4>Mitigations</h4><ul>{mitigations or "<li>—</li>"}</ul></div>
@@ -197,8 +235,14 @@ details summary{cursor:pointer;color:var(--ink-2);font-size:13px;text-decoration
 .cols h4{margin:6px 0 4px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .cols ul{margin:0;padding-left:16px}.cols li{font-size:13px;color:var(--ink-2);margin:2px 0}
 .sources{margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:12px;color:var(--muted)}
+.lesson,.lesson-grid{margin-top:12px}.lesson-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.lesson h4,.lesson-grid h4{margin:4px 0;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.lesson p,.lesson-grid p,.lesson-grid li,.lesson li{font-size:13px;color:var(--ink-2)}
+.lesson ol,.lesson-grid ul{margin:4px 0;padding-left:18px}
+.examples>div{border:1px solid var(--border);border-radius:8px;padding:10px}
+.safer{background:var(--surface)}.riskier{border-left:3px solid var(--accent)!important}
 a{color:var(--ink)}
 .refs{max-width:1100px;margin:0 auto;padding:24px}
 .foot{max-width:1100px;margin:0 auto;padding:24px;color:var(--muted);font-size:13px}
-@media(max-width:560px){.cols{grid-template-columns:1fr}}
+@media(max-width:560px){.cols,.lesson-grid{grid-template-columns:1fr}}
 """

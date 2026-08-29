@@ -123,12 +123,18 @@ def render_human(report: AuditReport, console: Console | None = None) -> None:
         )
         return
 
-    score = report.score if report.score is not None else 0
     header = Text()
-    header.append("Security score: ", style="bold")
-    header.append(f"{score}/100", style=_score_style(score))
+    header.append("Static risk score (indicator, not a safety verdict): ", style="bold")
+    if report.score is None:
+        # Not zero. Zero reads as "audited and terrible"; this is "not audited
+        # completely enough for the number to mean anything".
+        header.append("withheld", style="bold yellow")
+        border = "yellow"
+    else:
+        header.append(f"{report.score}/100", style=_score_style(report.score))
+        border = _score_style(report.score)
     console.print(
-        Panel(header, title=f"[bold]mcp-audit[/bold]  ·  {report.target}", border_style=_score_style(score))
+        Panel(header, title=f"[bold]mcp-audit[/bold]  ·  {report.target}", border_style=border)
     )
 
     summary = report.summary()
@@ -139,6 +145,32 @@ def render_human(report: AuditReport, console: Console | None = None) -> None:
     console.print(counts)
     console.print(f"Tools analyzed: {report.tools_analyzed}", style="dim")
     console.print(f"Evidence: {report.evidence_type}", style="dim")
+    if report.score is None and report.message:
+        console.print(f"[yellow]{report.message}[/yellow]")
+    if report.source_roles:
+        roles = ", ".join(f"{count} {role}" for role, count in sorted(report.source_roles.items()))
+        console.print(f"Sources: {roles}", style="dim")
+
+    # Printed before the findings, not after: a reviewer has to know the scan
+    # was incomplete before reading how few findings it produced.
+    if report.coverage_gaps:
+        console.print(
+            f"\n[yellow]{len(report.coverage_gaps)} unresolved registration(s)[/yellow] — "
+            "these tools were not analyzed, so this report does not cover them."
+        )
+        for gap in report.coverage_gaps:
+            console.print(f"  [dim]{gap['location']} ({gap['construct']}): {gap['reason']}[/dim]")
+    if report.package_inventory:
+        analyzed = sum(bool(item.get("analyzed")) for item in report.package_inventory)
+        console.print(
+            f"Package files analyzed: {analyzed}/{len(report.package_inventory)}", style="dim"
+        )
+    if report.package_coverage_gaps:
+        for gap in report.package_coverage_gaps:
+            console.print(
+                f"  [yellow]unresolved package reference:[/yellow] "
+                f"{gap.get('reference', '?')} — {gap.get('reason', 'unknown')}"
+            )
 
     capability_rows = [tool for tool in report.tools or [] if tool.capabilities or tool.annotations]
     if capability_rows:
@@ -173,8 +205,26 @@ def render_human(report: AuditReport, console: Console | None = None) -> None:
             body.append(", ".join(unclassified))
         console.print(Panel(body, title=f"[bold]Privilege policy[/bold] · {identity}", border_style=style))
 
+    if report.data_flows:
+        flow_table = Table(show_lines=True, expand=True, title="Sensitive data flows")
+        flow_table.add_column("Source")
+        flow_table.add_column("Sink")
+        flow_table.add_column("Status")
+        flow_table.add_column("Evidence")
+        for flow in report.data_flows:
+            flow_table.add_row(
+                flow["source"],
+                flow["sink"],
+                flow["status"],
+                f"{flow['source_evidence']['location']} -> {flow['sink_evidence']['location']}",
+            )
+        console.print(flow_table)
+
     if not report.findings:
-        console.print("\n[bold green]✓ No findings.[/bold green] This server looks clean.")
+        console.print(
+            "\n[bold green]No findings among supported threat patterns in the analyzed surface.[/bold green] "
+            "This is not a universal safety claim; review coverage and limitations."
+        )
         return
 
     console.print()

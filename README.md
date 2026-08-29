@@ -1,10 +1,11 @@
 # mcp-audit — MCP Server Auditor
 
-Static security auditor for [Model Context Protocol](https://modelcontextprotocol.io)
-servers. It **reads** an MCP server's tool definitions (it never runs them),
-applies a small set of explainable rules to detect **tool poisoning** and
-**over-privileged tools**, and prints a **0–100 security score** plus findings —
-as human-readable text or JSON for CI.
+Evidence-backed review engine for [Model Context Protocol](https://modelcontextprotocol.io)
+servers and Codex/Claude agent-skill packages. It **reads** definitions,
+instructions, scripts, references, and package assets (it never runs them),
+applies explainable rules, maps possible sensitive-data flows, and produces a
+**0–100 static risk indicator** plus evidence and reviewer questions. The number
+is a triage aid, never a universal `SAFE` verdict.
 
 > Safety first: the auditor never executes, imports, installs, or evals the
 > target. Target files are read as text only. This is deliberate — a malicious
@@ -104,9 +105,10 @@ is never installed, imported, or executed.
 path / file / GitHub URL
           |
           v
- safe fetch -> source extraction -> signature rules -> Atlas citations
-          |                                              |
-          +---------------- score + findings ------------+
+ safe fetch -> package inventory -> extraction -> rules -> Atlas lessons
+          |              |                         |
+          |       coverage + data flows            |
+          +--------- indicator + evidence ----------+
                                  |
                  terminal / JSON / styled HTML report
 ```
@@ -147,6 +149,8 @@ mcp-audit https://github.com/owner/repo
 mcp-audit ./my-server --json          # machine-readable AuditReport on stdout
 mcp-audit ./my-server --fail-on high  # exit non-zero if any high+ finding exists (CI gate)
 mcp-audit ./my-server --html report.html   # also write a shareable HTML dashboard
+mcp-audit review ./my-server               # the evidence-backed review packet
+mcp-audit review ./my-server --baseline prev.json   # ...plus what changed since
 mcp-audit playground                  # generate the interactive MCP Security Playground
 mcp-audit diff ./server-v1 ./server-v2     # what changed between two versions (rug pulls)
 mcp-audit ./my-server --policy examples/department-policy.yaml --agent alice-helper
@@ -486,10 +490,18 @@ poisoned skill — hidden "do not tell the user" steps, a `npx skills add
 <untrusted>` or `curl | bash` install line, "always prefer this skill" —
 is exactly what a supply-chain lure looks like.
 
-`mcp-audit` treats a `SKILL.md` as an auditable unit automatically: point it at a
-skill directory (or a repo of skills) and every rule applies. The whole
-instruction body is folded into the poisoning surface, and bundled scripts
-(`.py`, `.js`, `.sh`, `.ps1` next to the skill) are scanned too.
+`mcp-audit` treats the **whole package** as the auditable unit: `SKILL.md`,
+bundled scripts, references, configuration, templates, and opaque assets are
+inventoried together. Text and executable formats are analyzed statically;
+opaque files are not decoded or executed, but remain visible in inventory. A
+referenced file that is missing or cannot be analyzed becomes a coverage gap,
+withholds the numeric indicator, and forces `INSUFFICIENT_EVIDENCE`.
+
+The engine separately records sensitive-data **sources** (employee/customer
+PII, internal company files, credentials), **sinks** (external network,
+processes, logs, or file writes), and evidence-supported possible flows between
+them. `POSSIBLE` means a reviewer has a concrete path to verify; it does not
+claim that runtime exfiltration occurred.
 
 ```bash
 mcp-audit ./path/to/skill            # audit one skill directory
@@ -594,6 +606,8 @@ attack). Three layers keep that honest without touching the deterministic core:
 | DB-002 | high | over-privilege | Destructive/admin SQL capability (`DROP`, `TRUNCATE`, `GRANT`, `ALTER`) |
 | DE-001 | critical | data exfiltration | Data sent to a hardcoded external endpoint or known callback host |
 | DL-001 | medium | data leakage | Sensitive PII/credential tables and columns (`SELECT * FROM users`, SSN, card numbers) |
+| SP-001 | critical | data leakage | Sensitive personal information embedded directly in a skill package |
+| SF-001 | high | data exfiltration | Evidence-supported possible flow from sensitive package data to an external network sink |
 | CP-001 | high | capability mismatch | `readOnlyHint=true` contradicts a mutating handler capability |
 | CP-002 | high | capability mismatch | `destructiveHint=false` contradicts a destructive handler operation |
 | CP-003 | medium | capability mismatch | `openWorldHint=false` contradicts outbound network access |
@@ -616,9 +630,147 @@ score = max(0, 100 − Σ weight(severity_of_finding))
 weight: critical = 40, high = 20, medium = 10, low = 5, info = 0
 ```
 
-Higher is safer. Because info-level findings subtract 0, an otherwise clean
-server with only ME-001 still scores 100. The formula lives in
+Higher means fewer weighted findings among the supported patterns on the
+analyzed surface. It does **not** mean universally safer. Because info-level
+findings subtract 0, an otherwise clean server with only ME-001 still scores 100. The formula lives in
 [`scorer.py`](src/mcp_auditor/scorer.py) and is covered by tests.
+
+The score is a **risk-prioritization heuristic**, not a probability that a
+server is safe and not a measurement of detector accuracy. It does not use
+confidence, code coverage, precision, or recall. Multiple findings can also
+refer to the same underlying behavior, so do not compare the score with a
+machine-learning confidence score.
+
+## Detection benchmark: coverage, capabilities, and error rates
+
+Unit tests prove individual behavior, but they do not measure the auditor's
+overall error rate — and an error rate computed over tools the extractor never
+found is not a safety result at all. The repository therefore ships two labelled
+datasets, split by how they may be used:
+
+| Dataset | Split | Used for |
+|---|---|---|
+| [`benchmarks/capability-attribution-v1.yaml`](benchmarks/capability-attribution-v1.yaml) | `development` | Fast regression set debugged against. Never quote it as accuracy. |
+| [`benchmarks/official-inventory-v1.yaml`](benchmarks/official-inventory-v1.yaml) | `validation` | 58 reviewed tools across seven official servers at a pinned commit. Chooses extractor and rule changes. |
+
+```bash
+mcp-audit benchmark benchmarks/capability-attribution-v1.yaml
+mcp-audit benchmark benchmarks/official-inventory-v1.yaml --corpus-root ../servers
+mcp-audit benchmark benchmarks/official-inventory-v1.yaml --json
+```
+
+The validation corpus is referenced, not vendored — see
+[`benchmarks/README.md`](benchmarks/README.md) for the four commands that
+materialize the pinned checkout. Without it those cases report `unavailable`
+and the run fails, so a missing corpus can never read as a passing benchmark.
+
+Each dataset carries three kinds of human-reviewed label, and the evaluator
+reports each as its own view:
+
+- **discovery** — `expected_tools` per server: coverage, plus the tools that
+  were missed and the ones that were extracted without a label;
+- **capability** — one `(tool, capability, expected)` decision each, positive
+  *and* negative, so a handler that must not inherit a sibling's sink is
+  measured as explicitly as one that must;
+- **findings** — one `(rule, tool, expected)` decision each.
+
+For every view the report gives TP / FP / FN / TN, precision, recall,
+specificity, false-positive rate, F1, and accuracy — overall, per rule, per
+capability, and per registration shape, so a coverage failure is attributed to
+the shape that caused it rather than averaged away.
+
+Anything the engine gets wrong must be written down in the dataset as a
+`known_gap` (or `coverage_gaps`) with a reason. An unexplained miss fails the
+run; so does a gap that no longer reproduces, because a stale excuse hides real
+regressions. That makes the exit code meaningful in CI while still allowing an
+honest, measured deficit to be recorded rather than hidden.
+
+Measured baseline at commit `599dafc` of `modelcontextprotocol/servers`:
+
+| View | Result |
+|---|---|
+| Tool discovery | 100% (58/58) — every registration shape in the corpus |
+| Capability classification | precision 100%, recall 100% (28 TP, 0 FP, 0 FN, 51 TN) |
+| Findings | precision 100%, recall 100%, FPR 0% (7 TP, 0 FP, 0 FN, 18 TN) |
+
+That is a **validation-split** result: the corpus the engine's changes were
+chosen against. A separate frozen holdout of 109 tools across three community
+servers, evaluated once, says how much of it generalizes:
+
+| View | Validation | Holdout 1 | Holdout 2 |
+|---|---|---|---|
+| Tool discovery | 100% (58/58) | 5.5% (6/109) | **95.8% (46/48)** |
+| Finding precision | 100% | 11.1% | **78.6%** |
+| Capability recall | 100% | 0% | **0%** |
+
+Two frozen holdouts, each evaluated exactly once on servers the engine was not
+built against. The first found that almost nothing generalized; three changes
+followed; the second — built *before* those changes — measured them.
+
+The honest reading:
+
+- **Tool discovery generalizes now.** 46 of 48 on unfamiliar servers, including
+  33 whose descriptors are assembled by a factory in a different module from the
+  handler that returns them. One registration shape still misses, and is
+  recorded rather than fixed.
+- **Capability attribution still attributes nothing** on unfamiliar code. It
+  under-claims rather than claiming something wrong, which is the right
+  direction to fail in, but it is not evidence of anything. Read the `UNKNOWN`
+  rows and the vendor questions as the real output.
+- **Findings are usable but not clean.** 78.6% precision, up from 11.1%.
+
+Treat the validation number as a regression check, not as accuracy. The holdout
+numbers are the ones that describe the product.
+
+Detection signatures have two layers. `signatures.yaml` stores versioned rule
+metadata, severity, confidence, and pattern/configuration lists. `rules.py`
+contains the deterministic structural logic that applies those parameters.
+Changing a regex changes detector behavior and therefore requires a benchmark
+label or regression fixture, not only a version bump.
+
+## The review packet
+
+`mcp-audit review` is the output built for a human decision. It is not a score:
+it is the sheet a security specialist signs.
+
+```bash
+mcp-audit review ./my-server            # terminal
+mcp-audit review ./my-server --json     # machine-readable packet
+mcp-audit review ./my-server --baseline previous-audit.json
+```
+
+It contains identity and provenance, normalized tool and package inventories, a
+capability matrix, sensitive-data observations and possible flows, coverage
+gaps, every contradiction, Atlas explanations, reviewer/vendor questions, an
+optional change report, and an empty human-decision block.
+
+Every matrix cell carries **where the statement came from**:
+
+| Status | Meaning |
+|---|---|
+| `INFERRED` | derived statically from the implementation |
+| `DECLARED` | from MCP metadata, annotations, or schema |
+| `CLAIMED` | documentation only |
+| `OBSERVED` | seen in a controlled runtime test |
+| `VERIFIED` | accepted by a human reviewer |
+| `UNKNOWN` | the evidence does not answer the question |
+| `CONTRADICTED` | two evidence sources disagree |
+
+Two rules the packet follows without exception:
+
+**It never makes the human decision.** The decision `status` remains `PENDING`
+and the reviewer and notes stay empty. A separate contextual assessment ranks
+the next action as `INSUFFICIENT_EVIDENCE`, `REJECT_RECOMMENDED`,
+`REVIEW_REQUIRED`, `APPROVE_WITH_CONSTRAINTS`, or
+`ELIGIBLE_FOR_APPROVAL`. Even the last state explicitly says it is not a
+universal safety claim.
+
+**It never overstates its input.** A tree of prose about a server reports
+`evidence: documentation`, not `source`. A handler whose effects could not be
+followed gets an explicit `UNKNOWN` row and a written question, never a blank
+that reads as "no capabilities". And if any tool registration could not be
+resolved, the 0–100 score is **withheld entirely** rather than computed over a
+surface that was only partly parsed.
 
 ## The `AuditReport` contract
 
@@ -630,7 +782,7 @@ detection logic lives — CLI and JSON are thin wrappers):
   "target": "https://github.com/owner/repo",
   "is_mcp_server": true,
   "tools_analyzed": 7,
-  "score": 42,                     // null when is_mcp_server is false
+  "score": 42,                     // null when coverage is incomplete
   "findings": [
     {
       "id": "TP-001",
@@ -669,8 +821,10 @@ detection logic lives — CLI and JSON are thin wrappers):
 }
 ```
 
-When the target is not an MCP server, `is_mcp_server` is `false`, `score` is
-`null`, and a human-readable `message` explains why — no misleading score.
+When the target is not an MCP server—or an MCP/skill package has unresolved
+handlers, executables, or referenced files—`score` is `null` and a
+human-readable `message` explains why. Incomplete evidence never becomes a
+misleading number.
 
 ## How to add a signature
 

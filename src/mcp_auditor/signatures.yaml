@@ -8,10 +8,29 @@
 #
 # `version` is bumped (in lockstep with threats.yaml) whenever the set changes so
 # audits are reproducible against a known rule version (antivirus-style).
-version: 8
-released: "2026-08-11"
+version: 9
+released: "2026-08-29"
 
 rules:
+  # --- AI extension package data safety -----------------------------------
+  SP-001:
+    confidence: high
+    category: data_leakage
+    severity: critical
+    threat: AIX-T01
+    source: {ref: mcp-survey, section: "5.3.3"}
+    message: "Sensitive personal information is embedded in the published skill package."
+    recommendation: "Remove real personal data from the package. Replace it with clearly synthetic examples and rotate any affected credentials before publication."
+
+  SF-001:
+    confidence: medium
+    category: data_exfiltration
+    severity: high
+    threat: AIX-T02
+    source: {ref: mcp-survey, section: "5.3.3"}
+    message: "The skill package contains a possible sensitive-data source-to-external-network flow."
+    recommendation: "Confirm the minimum data required, approve and allowlist the destination, redact sensitive fields, and require user confirmation before transmission."
+
   # --- Tool poisoning (MCP-T04) --------------------------------------------
   TP-001:
     confidence: medium
@@ -65,7 +84,13 @@ rules:
     message: "Tool description references secrets, environment variables, system internals, or other tools."
     recommendation: "Descriptions must not reference secrets, environment variables, file paths, system prompts, or other tools' internals."
     patterns:
-      - "\\b[A-Z][A-Z0-9_]{3,}(_KEY|_TOKEN|_SECRET|_PASSWORD)\\b"
+      # Scoped `(?-i:...)` because this alternative alone must stay
+      # case-sensitive. It targets SCREAMING_SNAKE constants such as
+      # AWS_SECRET_KEY; matched case-insensitively it also hits `issue_key`,
+      # `project_key` and `space_key`, which produced 48 false positives and no
+      # true ones on the external holdout. Lowercase `api_key` is still covered
+      # by the `api[ _-]?key` alternative below.
+      - "(?-i:\\b[A-Z][A-Z0-9_]{3,}(?:_KEY|_TOKEN|_SECRET|_PASSWORD)\\b)"
       - "environment variable"
       - "\\benv var"
       - "process\\.env"
@@ -318,6 +343,17 @@ rules:
       - "pattern"
       - "format"
       - "const"
+    # Which dangerous parameters a verified path guard can account for. A guard
+    # on a path says nothing about a URL the same tool also accepts, so the
+    # exemption is scoped by parameter kind rather than applied to the tool.
+    path_param_names:
+      - "path"
+      - "filepath"
+      - "file_path"
+      - "file"
+      - "filename"
+      - "dir"
+      - "directory"
 
   OP-003:
     confidence: medium
@@ -540,15 +576,6 @@ rules:
       - "medical[ _]record|health[ _]record|\\bdiagnosis\\b"
       - "api_keys?\\s+(table|from)|from\\s+(api_keys|secrets|credentials|tokens)\\b"
 
-  # --- Meta / unauthorized access (MCP-T13) --------------------------------
-  ME-001:
-    confidence: high
-    category: meta
-    severity: info
-    threat: MCP-T13
-    source: {ref: mcp-survey, section: "5.3.4"}
-    message: "Tool definitions found but no authentication signal detected (unauthenticated exposure is a known MCP risk)."
-    recommendation: "Add authentication/authorization to the server if it is network-exposed."
 
   # --- Stateless protocol, revision 2026-07-28 ------------------------------
   # The initialize/initialized handshake and Mcp-Session-Id are gone: every

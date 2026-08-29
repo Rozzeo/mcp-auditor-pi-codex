@@ -1,0 +1,144 @@
+version: 2
+name: external-holdout-v2
+split: holdout
+purpose: >-
+  Built before the changes it is meant to measure, and not yet evaluated. The
+  first holdout (community-holdout-v1) has been run and its numbers are known,
+  which spends it: any fix aimed at those numbers fits the engine to that
+  corpus. This set exists so the work that follows - the low-level TypeScript
+  body gap, the metadata-matching rules, TP-003's case sensitivity - can be
+  measured against sources nobody has looked at yet.
+description: >-
+  48 tools across three servers from three organizations, in two languages and
+  three registration shapes, none overlapping the validation split or the first
+  holdout. Discovery labels were read out of the sources. Capability labels are
+  deliberately sparse: only claims verifiable from the handler are recorded, and
+  the cases that genuinely depend on deployment configuration are left unlabelled
+  rather than guessed.
+
+# SPENT. Evaluated once, on 2026-08-29, after the namespace-mount, TP-003 and
+# indirect-tool-array changes. Its numbers are now known, so it can no longer
+# measure anything those numbers were used to choose. A third holdout is needed
+# before the next round of changes can claim to generalize.
+#
+# Referenced, not vendored. Materialize each at its pinned commit, then pass the
+# directory holding all three as --corpus-root.
+corpus:
+  repo: multiple; see each case
+  commit: see each case
+  captured: 2026-08-29
+
+cases:
+  - id: figma-context-mcp
+    target: Figma-Context-MCP
+    shape: ts-register-tool-property
+    # GLips/Figma-Context-MCP @ c083d65c7e002923e7cb98f4e3bdafb105e90f6d
+    # server.registerTool(getFigmaDataTool.name, {...}, handler) - the name is a
+    # property read off an imported tool object, which is neither the string
+    # literal nor the bare identifier the extractor resolves today.
+    expected_tools:
+      - get_figma_data
+      - download_figma_images
+    capabilities:
+      # download_figma_images writes to disk and fetches: src/utils/common.ts
+      # calls fs.mkdirSync, fetch(imageUrl) and fs.createWriteStream.
+      - {tool: download_figma_images, capability: filesystem.write, expected: true}
+      - {tool: download_figma_images, capability: network.outbound, expected: true}
+      - {tool: download_figma_images, capability: process.execute, expected: false}
+      # get_figma_data reads the Figma API and returns it; it writes nothing.
+      - {tool: get_figma_data, capability: network.outbound, expected: true}
+      - {tool: get_figma_data, capability: filesystem.write, expected: false}
+      - {tool: get_figma_data, capability: filesystem.delete, expected: false}
+    # Adjudicated AFTER the single evaluation run, by reading each cited
+    # source. Weaker evidence than the discovery labels above, which were
+    # written before it.
+    labels:
+      - {rule: CR-001, tool: null, expected: true}
+      - {rule: RP-001, tool: null, expected: false}
+
+  - id: chroma-mcp
+    target: chroma-mcp
+    shape: py-fastmcp-decorator
+    # chroma-core/chroma-mcp @ 98ff67589bdcc31b730a5415ff9529433f949077
+    # Plain @mcp.tool() on a FastMCP imported directly from the SDK.
+    expected_tools:
+      - chroma_list_collections
+      - chroma_create_collection
+      - chroma_peek_collection
+      - chroma_get_collection_info
+      - chroma_get_collection_count
+      - chroma_modify_collection
+      - chroma_fork_collection
+      - chroma_delete_collection
+      - chroma_add_documents
+      - chroma_query_documents
+      - chroma_get_documents
+      - chroma_update_documents
+      - chroma_delete_documents
+    # No capability labels on purpose. Whether these tools reach the network or
+    # the local disk depends on which client the server was started with -
+    # chromadb.HttpClient, PersistentClient or EphemeralClient are all selected
+    # at runtime from arguments. The honest answer from source alone is UNKNOWN,
+    # and labelling a guess here would measure the labeller.
+    # Adjudicated AFTER the single evaluation run, by reading each cited
+    # source. Weaker evidence than the discovery labels above, which were
+    # written before it.
+    labels:
+      - {rule: CR-001, tool: null, expected: false}
+
+  - id: mcp-playwright
+    target: mcp-playwright
+    shape: ts-tool-factory
+    # executeautomation/mcp-playwright @ 2349c2891e7c499c8c07b7d78c7f3fb4c797a1da
+    # A createToolDefinitions() factory in src/tools.ts returns the descriptor
+    # array, which the ListTools handler in another module then returns - so the
+    # array is not inline in the handler call the scanner reads.
+    expected_tools:
+      - start_codegen_session
+      - end_codegen_session
+      - get_codegen_session
+      - clear_codegen_session
+      - playwright_navigate
+      - playwright_screenshot
+      - playwright_click
+      - playwright_iframe_click
+      - playwright_iframe_fill
+      - playwright_fill
+      - playwright_select
+      - playwright_hover
+      - playwright_upload_file
+      - playwright_evaluate
+      - playwright_console_logs
+      - playwright_resize
+      - playwright_close
+      - playwright_get
+      - playwright_post
+      - playwright_put
+      - playwright_patch
+      - playwright_delete
+      - playwright_expect_response
+      - playwright_assert_response
+      - playwright_custom_user_agent
+      - playwright_get_visible_text
+      - playwright_get_visible_html
+      - playwright_go_back
+      - playwright_go_forward
+      - playwright_drag
+      - playwright_press_key
+      - playwright_save_as_pdf
+      - playwright_click_and_switch_tab
+    # Adjudicated AFTER the single evaluation run, by reading each cited
+    # source. Weaker evidence than the discovery labels above, which were
+    # written before it.
+    labels:
+      - {rule: CR-001, tool: null, expected: false}
+      - {rule: OP-002, tool: playwright_delete, expected: true}
+      - {rule: OP-002, tool: playwright_evaluate, expected: true}
+      - {rule: OP-002, tool: playwright_expect_response, expected: true}
+      - {rule: OP-002, tool: playwright_get, expected: true}
+      - {rule: OP-002, tool: playwright_navigate, expected: true}
+      - {rule: OP-002, tool: playwright_patch, expected: true}
+      - {rule: OP-002, tool: playwright_post, expected: true}
+      - {rule: OP-002, tool: playwright_put, expected: true}
+      - {rule: OP-002, tool: playwright_save_as_pdf, expected: true}
+      - {rule: OP-002, tool: playwright_upload_file, expected: true}
