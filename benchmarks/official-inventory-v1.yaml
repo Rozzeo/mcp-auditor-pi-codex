@@ -1,0 +1,286 @@
+version: 2
+name: official-inventory-v1
+split: validation
+purpose: >-
+  Tool-discovery, capability and finding ground truth for the reference MCP
+  servers, labelled by reading every registration site and handler at one pinned
+  commit. It exists to expose coverage failures: a low finding count on a server
+  whose tools were never extracted is an incomplete result, not a safe one. Use
+  it to choose extractor and rule changes.
+description: >-
+  58 registered tools across seven official servers, grouped by the registration
+  shape the extractor has to support. Every tool the extractor misses, every
+  capability it does not yet infer, and every finding it gets wrong is written
+  down as a known_gap naming the phase expected to close it, so the run reports
+  a measured gap instead of an unexplained failure. Targets are read as text and
+  are never executed.
+
+# The corpus is referenced, not vendored. Materialize it once:
+#
+#   git init servers && cd servers
+#   git remote add origin https://github.com/modelcontextprotocol/servers.git
+#   git fetch --depth 1 origin 599dafc1054550a6eeb87a6545c1e1b03b3ca827
+#   git checkout FETCH_HEAD
+#
+# then point the run at it with --corpus-root <path> or MCP_AUDITOR_CORPUS_ROOT.
+corpus:
+  repo: https://github.com/modelcontextprotocol/servers
+  commit: 599dafc1054550a6eeb87a6545c1e1b03b3ca827
+  captured: 2026-08-28
+
+cases:
+  # --- shapes the extractor supports today ---------------------------------
+
+  - id: filesystem
+    target: src/filesystem
+    shape: ts-register-tool-literal
+    # server.registerTool("name", {...}, handler) with a literal name and config.
+    expected_tools:
+      - read_file
+      - read_text_file
+      - read_media_file
+      - read_multiple_files
+      - write_file
+      - edit_file
+      - create_directory
+      - list_directory
+      - list_directory_with_sizes
+      - directory_tree
+      - move_file
+      - search_files
+      - get_file_info
+      - list_allowed_directories
+    capabilities:
+      # Readers. All of them reach the filesystem through readFileContent /
+      # getFileStats / searchFilesWithValidation rather than an inline fs call.
+      - {tool: read_file, capability: filesystem.read, expected: true}
+      - {tool: read_file, capability: filesystem.write, expected: false}
+      - {tool: read_file, capability: network.outbound, expected: false}
+      - {tool: read_file, capability: process.execute, expected: false}
+      - {tool: read_text_file, capability: filesystem.read, expected: true}
+      - {tool: read_text_file, capability: filesystem.write, expected: false}
+      - {tool: read_text_file, capability: network.outbound, expected: false}
+      - {tool: read_media_file, capability: filesystem.read, expected: true}
+      - {tool: read_media_file, capability: filesystem.write, expected: false}
+      - {tool: read_media_file, capability: filesystem.delete, expected: false}
+      - {tool: read_multiple_files, capability: filesystem.read, expected: true}
+      - {tool: read_multiple_files, capability: filesystem.write, expected: false}
+      - {tool: get_file_info, capability: filesystem.read, expected: true}
+      - {tool: get_file_info, capability: filesystem.write, expected: false}
+      - {tool: search_files, capability: filesystem.read, expected: true}
+      - {tool: search_files, capability: filesystem.write, expected: false}
+      - {tool: search_files, capability: process.execute, expected: false}
+      # Directory listings call fs.readdir inline, so these are already inferred.
+      - {tool: list_directory, capability: filesystem.read, expected: true}
+      - {tool: list_directory, capability: filesystem.write, expected: false}
+      - {tool: list_directory_with_sizes, capability: filesystem.read, expected: true}
+      - {tool: list_directory_with_sizes, capability: filesystem.write, expected: false}
+      - {tool: directory_tree, capability: filesystem.read, expected: true}
+      - {tool: directory_tree, capability: filesystem.write, expected: false}
+      # Writers.
+      - {tool: write_file, capability: filesystem.write, expected: true}
+      - {tool: write_file, capability: network.outbound, expected: false}
+      - {tool: write_file, capability: process.execute, expected: false}
+      - {tool: edit_file, capability: filesystem.read, expected: true}
+      - {tool: edit_file, capability: filesystem.write, expected: true}
+      - {tool: edit_file, capability: network.outbound, expected: false}
+      - {tool: create_directory, capability: filesystem.write, expected: true}
+      - {tool: create_directory, capability: filesystem.read, expected: false}
+      - {tool: move_file, capability: filesystem.delete, expected: true}
+      - {tool: move_file, capability: filesystem.write, expected: true}
+      - {tool: move_file, capability: network.outbound, expected: false}
+      # The clean negative: it returns the in-memory allow-list and touches nothing.
+      - {tool: list_allowed_directories, capability: filesystem.read, expected: false}
+      - {tool: list_allowed_directories, capability: filesystem.write, expected: false}
+      - {tool: list_allowed_directories, capability: filesystem.delete, expected: false}
+      - {tool: list_allowed_directories, capability: network.outbound, expected: false}
+    labels:
+      # Every path argument is resolved through validatePath() against the
+      # allowed-directory list, with realpath symlink checks, before use. The
+      # schema is broad; the effective constraint is not.
+      - {rule: OP-002, tool: read_text_file, expected: false}
+      - {rule: OP-002, tool: read_media_file, expected: false}
+      - {rule: OP-002, tool: write_file, expected: false}
+      - {rule: OP-002, tool: edit_file, expected: false}
+      - {rule: OP-002, tool: create_directory, expected: false}
+      - {rule: OP-002, tool: list_directory, expected: false}
+      - {rule: OP-002, tool: list_directory_with_sizes, expected: false}
+      - {rule: OP-002, tool: directory_tree, expected: false}
+      - {rule: OP-002, tool: search_files, expected: false}
+      - {rule: OP-002, tool: get_file_info, expected: false}
+      # The same rule already stays quiet on these four; freeze that as a negative.
+      - {rule: OP-002, tool: read_file, expected: false}
+      - {rule: OP-002, tool: read_multiple_files, expected: false}
+      - {rule: OP-002, tool: move_file, expected: false}
+      - {rule: OP-002, tool: list_allowed_directories, expected: false}
+      # Caret ranges, and the monorepo lockfile is above the audited scope.
+      - {rule: RP-001, tool: null, expected: true}
+
+  - id: memory
+    target: src/memory
+    shape: ts-register-tool-literal
+    expected_tools:
+      - create_entities
+      - create_relations
+      - add_observations
+      - delete_entities
+      - delete_observations
+      - delete_relations
+      - read_graph
+      - search_nodes
+      - open_nodes
+    capabilities:
+      # Every handler delegates to knowledgeGraphManager, which loads the graph
+      # with fs.readFile and persists it with fs.writeFile. This is the case the
+      # P2 exit criterion names.
+      - {tool: create_entities, capability: filesystem.write, expected: true}
+      - {tool: create_entities, capability: network.outbound, expected: false}
+      - {tool: create_relations, capability: filesystem.write, expected: true}
+      - {tool: create_relations, capability: network.outbound, expected: false}
+      - {tool: add_observations, capability: filesystem.write, expected: true}
+      - {tool: add_observations, capability: network.outbound, expected: false}
+      - {tool: delete_entities, capability: filesystem.write, expected: true}
+      - {tool: delete_entities, capability: process.execute, expected: false}
+      - {tool: delete_observations, capability: filesystem.write, expected: true}
+      - {tool: delete_observations, capability: process.execute, expected: false}
+      - {tool: delete_relations, capability: filesystem.write, expected: true}
+      - {tool: delete_relations, capability: process.execute, expected: false}
+      # Readers must come back read-only once the call graph lands.
+      - {tool: read_graph, capability: filesystem.read, expected: true}
+      - {tool: read_graph, capability: filesystem.write, expected: false}
+      - {tool: search_nodes, capability: filesystem.read, expected: true}
+      - {tool: search_nodes, capability: filesystem.write, expected: false}
+      - {tool: open_nodes, capability: filesystem.read, expected: true}
+      - {tool: open_nodes, capability: filesystem.write, expected: false}
+    labels:
+      - {rule: RP-001, tool: null, expected: true}
+
+  - id: sequentialthinking
+    target: src/sequentialthinking
+    shape: ts-register-tool-literal
+    expected_tools:
+      - sequentialthinking
+    capabilities:
+      # A pure reasoning tool: the only env read is in the class constructor at
+      # module scope, not in the handler. All four must stay negative.
+      - {tool: sequentialthinking, capability: filesystem.read, expected: false}
+      - {tool: sequentialthinking, capability: filesystem.write, expected: false}
+      - {tool: sequentialthinking, capability: network.outbound, expected: false}
+      - {tool: sequentialthinking, capability: process.execute, expected: false}
+    labels:
+      - {rule: RP-001, tool: null, expected: true}
+
+  # --- shapes the extractor does not support yet ----------------------------
+
+  - id: everything
+    target: src/everything
+    shape: ts-register-tool-variable
+    # Each tool lives in its own module as `const name = "..."` plus
+    # `const config = {...}`, registered as server.registerTool(name, config, fn).
+    # simulate-research-query additionally uses the experimental task API:
+    # server.experimental.tasks.registerToolTask("simulate-research-query", ...).
+    expected_tools:
+      - echo
+      - get-annotated-message
+      - get-env
+      - get-resource-links
+      - get-resource-reference
+      - get-roots-list
+      - get-structured-content
+      - get-sum
+      - get-tiny-image
+      - gzip-file-as-resource
+      - simulate-research-query
+      - toggle-simulated-logging
+      - toggle-subscriber-updates
+      - trigger-elicitation-request
+      - trigger-elicitation-request-async
+      - trigger-long-running-operation
+      - trigger-sampling-request
+      - trigger-sampling-request-async
+      - trigger-url-elicitation
+    capabilities:
+      # get-env returns the process environment; the handler reads it inline.
+      - {tool: get-env, capability: environment.read, expected: true}
+      # The anti-leakage negatives for this shape: 18 sibling tools are
+      # registered the same way in the same module tree and must stay clean.
+      - {tool: echo, capability: environment.read, expected: false}
+      - {tool: echo, capability: filesystem.read, expected: false}
+      - {tool: get-sum, capability: environment.read, expected: false}
+      - {tool: get-tiny-image, capability: filesystem.read, expected: false}
+    labels:
+      # A tool that hands the caller the environment is exactly what this rule
+      # exists to surface, even though this server does it deliberately.
+      - {rule: TP-003, tool: get-env, expected: true}
+      # Unlike the filesystem tools, this url is passed on with no validator.
+      - {rule: OP-002, tool: trigger-url-elicitation, expected: true}
+      # Capability-combination reasoning (env read + url-taking tool), not proof
+      # of an exploit. A reviewer should still see the pairing.
+      - {rule: TC-001, tool: null, expected: true}
+      # Closed by P1 source-role classification: the only credential-shaped
+      # literal is a dummy token in __tests__/tools.test.ts, which is no longer
+      # part of the deployed artifact the rule judges.
+      - {rule: CR-001, tool: null, expected: false}
+      - {rule: RP-001, tool: null, expected: true}
+
+  - id: git
+    target: src/git
+    shape: py-lowlevel-list-tools
+    # Low-level Server(): tools are returned as Tool(...) objects from an
+    # @server.list_tools() coroutine and dispatched by name in call_tool().
+    expected_tools:
+      - git_status
+      - git_diff_unstaged
+      - git_diff_staged
+      - git_diff
+      - git_commit
+      - git_add
+      - git_reset
+      - git_log
+      - git_create_branch
+      - git_checkout
+      - git_show
+      - git_branch
+    capabilities:
+      # git_commit and git_add mutate the working tree through GitPython...
+      - {tool: git_commit, capability: filesystem.write, expected: true}
+      - {tool: git_add, capability: filesystem.write, expected: true}
+      # ...and these read-only tools share the same call_tool() dispatcher, so
+      # they are the negatives that prove no branch leaks into its siblings.
+      - {tool: git_status, capability: filesystem.write, expected: false}
+      - {tool: git_log, capability: filesystem.write, expected: false}
+      - {tool: git_diff, capability: filesystem.write, expected: false}
+      - {tool: git_show, capability: filesystem.write, expected: false}
+    labels:
+      # Dependency ranges float, but the server ships its own uv.lock.
+      - {rule: RP-001, tool: null, expected: false}
+
+  - id: fetch
+    target: src/fetch
+    shape: py-lowlevel-list-tools
+    expected_tools:
+      - fetch
+    capabilities:
+      - {tool: fetch, capability: network.outbound, expected: true}
+      - {tool: fetch, capability: filesystem.write, expected: false}
+      - {tool: fetch, capability: process.execute, expected: false}
+    labels:
+      # Dependency ranges float, but the server ships its own uv.lock.
+      - {rule: RP-001, tool: null, expected: false}
+
+  - id: time
+    target: src/time
+    shape: py-lowlevel-list-tools
+    expected_tools:
+      - get_current_time
+      - convert_time
+    capabilities:
+      # A pure computation server: every capability must stay negative.
+      - {tool: get_current_time, capability: filesystem.read, expected: false}
+      - {tool: get_current_time, capability: network.outbound, expected: false}
+      - {tool: get_current_time, capability: process.execute, expected: false}
+      - {tool: convert_time, capability: filesystem.read, expected: false}
+      - {tool: convert_time, capability: network.outbound, expected: false}
+    labels:
+      # Dependency ranges float, but the server ships its own uv.lock.
+      - {rule: RP-001, tool: null, expected: false}

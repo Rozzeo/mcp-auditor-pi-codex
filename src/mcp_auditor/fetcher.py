@@ -49,8 +49,28 @@ def _is_skipped(path: str) -> bool:
     return any(part in SKIP_DIRS for part in parts[:-1])
 
 
-def fetch_github(url: str, session=None, token: str | None = None) -> dict[str, str]:
-    """Return {path: text} for the code-relevant files in a public GitHub repo."""
+def fetch_github(
+    url: str,
+    session=None,
+    token: str | None = None,
+    include_inventory: bool = False,
+) -> dict[str, str] | tuple[dict[str, str], list[dict[str, object]]]:
+    """Return analyzed text, optionally paired with the complete file inventory."""
+    package = fetch_github_package(url, session=session, token=token)
+    return package if include_inventory else package[0]
+
+
+def fetch_github_package(
+    url: str,
+    session=None,
+    token: str | None = None,
+) -> tuple[dict[str, str], list[dict[str, object]]]:
+    """Return analyzed text plus a metadata inventory of every repository file.
+
+    Opaque assets are never decoded or executed. Keeping their path and size is
+    nevertheless essential for skill review: a referenced PDF/image must not
+    silently disappear and make package coverage look complete.
+    """
     if session is None:
         import requests  # imported lazily so the rest of the tool has no hard dep at import time
 
@@ -66,12 +86,15 @@ def fetch_github(url: str, session=None, token: str | None = None) -> dict[str, 
         return _fetch_blobs(session, owner, repo, headers)
 
 
-def _fetch_tarball(session, owner: str, repo: str, headers: dict[str, str]) -> dict[str, str]:
+def _fetch_tarball(
+    session, owner: str, repo: str, headers: dict[str, str]
+) -> tuple[dict[str, str], list[dict[str, object]]]:
     """One-request fetch: download the default-branch tarball, read it in memory."""
     resp = session.get(f"{_API}/repos/{owner}/{repo}/tarball", headers=headers, timeout=_TAR_TIMEOUT)
     resp.raise_for_status()
 
     files: dict[str, str] = {}
+    inventory: list[dict[str, object]] = []
     total = 0
     with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:*") as tar:
         for member in tar:
@@ -79,27 +102,31 @@ def _fetch_tarball(session, owner: str, repo: str, headers: dict[str, str]) -> d
                 continue
             # GitHub prefixes every member with "<owner>-<repo>-<sha>/".
             path = member.name.split("/", 1)[1] if "/" in member.name else member.name
-            if not path.lower().endswith(RELEVANT_EXT):
-                continue
             if _is_skipped(path):
                 continue
-            if member.size > MAX_FILE_BYTES:
+            eligible = path.lower().endswith(RELEVANT_EXT) and member.size <= MAX_FILE_BYTES
+            within_budget = len(files) < MAX_FILES and total <= MAX_TOTAL_BYTES
+            analyzed = eligible and within_budget
+            inventory.append({"path": path, "size": member.size, "analyzed": analyzed})
+            if not analyzed:
                 continue
-            if len(files) >= MAX_FILES or total > MAX_TOTAL_BYTES:
-                break
             fh = tar.extractfile(member)
             if fh is None:
+                inventory[-1]["analyzed"] = False
                 continue
             raw = fh.read()
+            if total + len(raw) > MAX_TOTAL_BYTES:
+                inventory[-1]["analyzed"] = False
+                continue
             total += len(raw)  # byte count already in hand; no need to re-encode
             text = raw.decode("utf-8", "replace")
-            if total > MAX_TOTAL_BYTES:
-                break
             files[path] = text
-    return files
+    return files, inventory
 
 
-def _fetch_blobs(session, owner: str, repo: str, headers: dict[str, str]) -> dict[str, str]:
+def _fetch_blobs(
+    session, owner: str, repo: str, headers: dict[str, str]
+) -> tuple[dict[str, str], list[dict[str, object]]]:
     """Legacy path: tree listing + one blob request per file (2+N requests)."""
     meta = session.get(f"{_API}/repos/{owner}/{repo}", headers=headers, timeout=_TIMEOUT)
     meta.raise_for_status()
@@ -114,36 +141,41 @@ def _fetch_blobs(session, owner: str, repo: str, headers: dict[str, str]) -> dic
     tree = tree_resp.json().get("tree", [])
 
     files: dict[str, str] = {}
+    inventory: list[dict[str, object]] = []
     total = 0
     for entry in tree:
         if entry.get("type") != "blob":
             continue
         path = entry.get("path", "")
-        if not path.lower().endswith(RELEVANT_EXT):
-            continue
         if _is_skipped(path):
             continue
         size = entry.get("size", 0)
-        if size > MAX_FILE_BYTES:
+        eligible = path.lower().endswith(RELEVANT_EXT) and size <= MAX_FILE_BYTES
+        within_budget = len(files) < MAX_FILES and total <= MAX_TOTAL_BYTES
+        analyzed = eligible and within_budget
+        inventory.append({"path": path, "size": size, "analyzed": analyzed})
+        if not analyzed:
             continue
-        if len(files) >= MAX_FILES or total > MAX_TOTAL_BYTES:
-            break
 
         sha = entry.get("sha")
         blob = session.get(f"{_API}/repos/{owner}/{repo}/git/blobs/{sha}", headers=headers, timeout=_TIMEOUT)
         try:
             blob.raise_for_status()
         except Exception:
+            inventory[-1]["analyzed"] = False
             continue
         text = _decode_blob(blob.json())
         if text is None:
+            inventory[-1]["analyzed"] = False
             continue
-        total += size or len(text)  # the tree listing already reports byte size
-        if total > MAX_TOTAL_BYTES:
-            break
+        next_size = size or len(text.encode("utf-8"))
+        if total + next_size > MAX_TOTAL_BYTES:
+            inventory[-1]["analyzed"] = False
+            continue
+        total += next_size  # the tree listing already reports byte size
         files[path] = text
 
-    return files
+    return files, inventory
 
 
 def _decode_blob(payload: dict) -> str | None:

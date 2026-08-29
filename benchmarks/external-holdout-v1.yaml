@@ -1,0 +1,240 @@
+version: 3
+name: external-holdout-v1
+split: holdout
+purpose: >-
+  Frozen, one-shot generalization check on MCP servers outside the
+  modelcontextprotocol/servers repository family. Labels were produced from
+  source before the auditor was run. This dataset may report accuracy but must
+  never be used to choose or tune detector changes.
+description: >-
+  Three independently maintained repositories pinned at exact commits. The
+  inventory describes the observable MCP surface: mounted FastMCP child tools
+  use their public jira_ and confluence_ namespaces. Every expected tool has a
+  positive or negative label for every capability in the policy vocabulary.
+  Finding ground truth is scoped to the two TypeScript servers; the much larger
+  Atlassian case measures discovery and capability attribution only.
+labelled_at: 2026-08-28
+label_protocol: source-review-before-first-auditor-run
+reviewer: codex
+
+# Materialize these three checkouts beneath one directory and pass that
+# directory as --corpus-root. The runner verifies every HEAD before analysis.
+corpus:
+  repositories:
+    - path: mcp-atlassian
+      repo: https://github.com/sooperset/mcp-atlassian
+      commit: 04511d24ac792db240fc105e5ed0759ec82f4df8
+    - path: tavily-mcp
+      repo: https://github.com/tavily-ai/tavily-mcp
+      commit: 248dc9e3e385305ad3281120284ff662af4b5940
+    - path: fetch-mcp
+      repo: https://github.com/zcaceres/fetch-mcp
+      commit: 1ddb1a59cb09a2d38e759f2d7a97829680cbe514
+
+cases:
+  - id: mcp-atlassian
+    target: mcp-atlassian
+    shape: py-fastmcp-mounted-namespaces
+    source_role: production
+    rationale: >-
+      main_mcp mounts jira_mcp and confluence_mcp with namespaces. All tools
+      call the configured Atlassian API. Attachment upload tools also read
+      caller-selected local files; jira_download_attachments writes files.
+      Confluence download tools return embedded bytes and do not write locally.
+    expected_tools:
+      - jira_get_user_profile
+      - jira_search_assignable_users
+      - jira_get_issue_watchers
+      - jira_add_watcher
+      - jira_remove_watcher
+      - jira_get_issue
+      - jira_search
+      - jira_search_fields
+      - jira_get_field_options
+      - jira_get_project_issues
+      - jira_get_transitions
+      - jira_get_worklog
+      - jira_download_attachments
+      - jira_get_issue_images
+      - jira_get_agile_boards
+      - jira_get_board_issues
+      - jira_get_sprints_from_board
+      - jira_get_sprint_issues
+      - jira_get_link_types
+      - jira_create_issue
+      - jira_batch_create_issues
+      - jira_batch_get_changelogs
+      - jira_update_issue
+      - jira_assign_issue
+      - jira_delete_issue
+      - jira_move_issue
+      - jira_add_comment
+      - jira_edit_comment
+      - jira_add_worklog
+      - jira_link_to_epic
+      - jira_create_issue_link
+      - jira_create_remote_issue_link
+      - jira_remove_issue_link
+      - jira_transition_issue
+      - jira_create_sprint
+      - jira_update_sprint
+      - jira_add_issues_to_sprint
+      - jira_move_issues_to_backlog
+      - jira_get_project_issue_types
+      - jira_get_create_fields
+      - jira_get_project_versions
+      - jira_get_project_components
+      - jira_get_all_projects
+      - jira_search_projects
+      - jira_get_project_fields
+      - jira_get_service_desk_for_project
+      - jira_get_service_desk_queues
+      - jira_get_queue_issues
+      - jira_get_request_types
+      - jira_get_request_type_fields
+      - jira_create_customer_request
+      - jira_create_version
+      - jira_batch_create_versions
+      - jira_update_version
+      - jira_get_issue_proforma_forms
+      - jira_get_proforma_form_details
+      - jira_update_proforma_form_answers
+      - jira_get_issue_dates
+      - jira_get_issue_sla
+      - jira_get_issue_development_info
+      - jira_get_issues_development_info
+      - jira_get_project_epic_hierarchy
+      - jira_get_cross_project_dependencies
+      - confluence_search
+      - confluence_get_page
+      - confluence_get_page_children
+      - confluence_get_space_page_tree
+      - confluence_get_comments
+      - confluence_get_labels
+      - confluence_add_label
+      - confluence_create_page
+      - confluence_update_page
+      - confluence_update_page_section
+      - confluence_delete_page
+      - confluence_move_page
+      - confluence_add_comment
+      - confluence_reply_to_comment
+      - confluence_get_inline_comments
+      - confluence_add_inline_comment
+      - confluence_search_user
+      - confluence_get_page_history
+      - confluence_get_page_diff
+      - confluence_get_page_views
+      - confluence_upload_attachment
+      - confluence_upload_attachments
+      - confluence_get_attachments
+      - confluence_download_attachment
+      - confluence_download_content_attachments
+      - confluence_delete_attachment
+      - confluence_get_page_images
+      - confluence_list_page_templates
+      - confluence_get_page_template
+      - confluence_create_page_from_template
+      - confluence_get_page_restrictions
+      - confluence_set_page_restrictions
+      - confluence_copy_page
+      - confluence_check_content_permissions
+      - confluence_get_space_permissions
+    capability_defaults:
+      filesystem.read: false
+      filesystem.write: false
+      filesystem.delete: false
+      database.read: false
+      database.write: false
+      database.raw-query: false
+      database.destructive: false
+      network.outbound: true
+      process.execute: false
+      environment.read: false
+      secrets.read: false
+    capabilities:
+      - {tool: jira_download_attachments, capability: filesystem.write, expected: true}
+      - {tool: confluence_upload_attachment, capability: filesystem.read, expected: true}
+      - {tool: confluence_upload_attachments, capability: filesystem.read, expected: true}
+
+  - id: tavily-mcp
+    target: tavily-mcp
+    shape: ts-sdk-server-tool-array
+    source_role: production
+    has_auth_signal: true
+    rationale: >-
+      Each handler sends a request through the Tavily axios client. The crawl,
+      map, and extract surfaces accept caller-controlled destination URLs; the
+      extract surface carries them as an array. No handler accesses local files,
+      processes, databases, environment variables, or secrets at call time.
+    expected_tools:
+      - tavily_search
+      - tavily_extract
+      - tavily_crawl
+      - tavily_map
+      - tavily_research
+    capability_defaults:
+      filesystem.read: false
+      filesystem.write: false
+      filesystem.delete: false
+      database.read: false
+      database.write: false
+      database.raw-query: false
+      database.destructive: false
+      network.outbound: true
+      process.execute: false
+      environment.read: false
+      secrets.read: false
+    labels:
+      - {rule: OP-002, tool: tavily_extract, expected: true}
+      - {rule: OP-002, tool: tavily_crawl, expected: true}
+      - {rule: OP-002, tool: tavily_map, expected: true}
+      - {rule: ME-001, tool: null, expected: false}
+      - {rule: CR-001, tool: null, expected: false}
+      - {rule: RP-001, tool: null, expected: false}
+
+  - id: fetch-mcp
+    target: fetch-mcp
+    shape: ts-lowlevel-list-tools-dispatch
+    source_role: production
+    has_auth_signal: false
+    rationale: >-
+      All six tools fetch remote content. validateUrl rejects non-HTTP(S),
+      private/reserved destinations, and DNS rebinding before use. The YouTube
+      fallback can run yt-dlp, creates a temporary output directory, reads the
+      generated subtitle, and removes the directory. pnpm-lock.yaml freezes the
+      dependency graph even though RP-001's current lockfile list may miss it.
+    expected_tools:
+      - fetch_html
+      - fetch_markdown
+      - fetch_txt
+      - fetch_json
+      - fetch_readable
+      - fetch_youtube_transcript
+    capability_defaults:
+      filesystem.read: false
+      filesystem.write: false
+      filesystem.delete: false
+      database.read: false
+      database.write: false
+      database.raw-query: false
+      database.destructive: false
+      network.outbound: true
+      process.execute: false
+      environment.read: false
+      secrets.read: false
+    capabilities:
+      - {tool: fetch_youtube_transcript, capability: filesystem.read, expected: true}
+      - {tool: fetch_youtube_transcript, capability: filesystem.write, expected: true}
+      - {tool: fetch_youtube_transcript, capability: filesystem.delete, expected: true}
+      - {tool: fetch_youtube_transcript, capability: process.execute, expected: true}
+    labels:
+      - {rule: OP-002, tool: fetch_html, expected: false}
+      - {rule: OP-002, tool: fetch_markdown, expected: false}
+      - {rule: OP-002, tool: fetch_txt, expected: false}
+      - {rule: OP-002, tool: fetch_json, expected: false}
+      - {rule: OP-002, tool: fetch_readable, expected: false}
+      - {rule: OP-002, tool: fetch_youtube_transcript, expected: false}
+      - {rule: CI-001, tool: fetch_youtube_transcript, expected: true}
+      - {rule: ME-001, tool: null, expected: true}
+      - {rule: RP-001, tool: null, expected: false}

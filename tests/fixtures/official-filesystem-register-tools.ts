@@ -2,7 +2,29 @@
 // 599dafc1054550a6eeb87a6545c1e1b03b3ca827, src/filesystem/index.ts.
 // The two registerTool calls below are verbatim (upstream lines 248-316 and
 // 615-642); only the unrelated registrations between them are omitted.
+// The readFileAsBase64Stream helper (upstream lines 173-186) is included
+// verbatim too, because read_media_file reaches the filesystem through it:
+// without the helper there is nothing for capability propagation to resolve,
+// and the fixture would silently stop testing the thing it exists to test.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+// Reads a file as a stream of buffers, concatenates them, and then encodes
+// the result to a Base64 string. This is a memory-efficient way to handle
+// binary data from a stream before the final encoding.
+async function readFileAsBase64Stream(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const stream = createReadStream(filePath);
+    const chunks: Buffer[] = [];
+    stream.on('data', (chunk) => {
+      chunks.push(chunk as Buffer);
+    });
+    stream.on('end', () => {
+      const finalBuffer = Buffer.concat(chunks);
+      resolve(finalBuffer.toString('base64'));
+    });
+    stream.on('error', (err) => reject(err));
+  });
+}
 
 server.registerTool(
   "read_media_file",

@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+from .callgraph import CallIndex, build_index, find_guards, is_guard_chain, walk
 from .types import CapabilityEvidence, Tool
 
 
@@ -58,7 +59,12 @@ _API_PATTERNS: tuple[tuple[str, re.Pattern[str], bool, str], ...] = (
         "filesystem.read",
         re.compile(
             r"\b(?:fs(?:\.promises)?\.)?"
-            r"(?:readFile|readFileSync|createReadStream|readdir|readdirSync)\s*\("
+            r"(?:readFile|readFileSync|createReadStream|readdir|readdirSync"
+            # Metadata is content too: stat/lstat/realpath answer questions
+            # about a path the caller supplied.
+            r"|stat|statSync|lstat|lstatSync|realpath|realpathSync)\s*\("
+            r"|\bos\.(?:stat|lstat|listdir|scandir|walk)\s*\("
+            r"|\bPath\([^\n)]*\)\.(?:stat|iterdir|glob|rglob)\s*\("
             r"|\bPath\([^\n)]*\)\.(?:read_text|read_bytes)\s*\("
             r"|\bopen\s*\([^\n)]*\)\.read\s*\(",
             re.IGNORECASE,
@@ -70,9 +76,21 @@ _API_PATTERNS: tuple[tuple[str, re.Pattern[str], bool, str], ...] = (
         "filesystem.write",
         re.compile(
             r"\b(?:fs(?:\.promises)?\.)?"
-            r"(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream)\s*\("
-            r"|\bPath\([^\n)]*\)\.(?:write_text|write_bytes)\s*\("
-            r"|\bopen\s*\([^\n,]+,\s*[\"'][wax][^\"']*[\"']",
+            r"(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream"
+            # Creating a directory, copying onto a path, and renaming all put
+            # bytes at a path the caller chose. Classifying rename as a delete
+            # alone described only half of what move_file does.
+            r"|mkdir|mkdirSync|copyFile|copyFileSync|cp|cpSync|rename|renameSync)\s*\("
+            r"|\bPath\([^\n)]*\)\.(?:write_text|write_bytes|mkdir)\s*\("
+            r"|\bos\.(?:mkdir|makedirs|rename|replace)\s*\("
+            r"|\bshutil\.(?:copy|copy2|copyfile|copytree|move)\s*\("
+            r"|\bopen\s*\([^\n,]+,\s*[\"'][wax][^\"']*[\"']"
+            # A commit, an add, a checkout or a reset all change bytes on disk -
+            # in .git and often in the working tree. A reviewer asking what a
+            # tool can alter needs these named.
+            r"|\brepo\.index\.(?:commit|add|remove|move|reset|write)\s*\("
+            r"|\brepo\.git\.(?:add|commit|checkout|reset|rm|mv|merge|rebase|apply|clean|stash)\s*\("
+            r"|\brepo\.(?:create_head|delete_head|create_tag|clone_from)\s*\(",
             re.IGNORECASE,
         ),
         False,
@@ -81,9 +99,16 @@ _API_PATTERNS: tuple[tuple[str, re.Pattern[str], bool, str], ...] = (
     (
         "filesystem.delete",
         re.compile(
-            r"\b(?:fs(?:\.promises)?\.)?"
+            # Qualified only. A bare `remove(` is far more often a collection
+            # operation - `sessionResources.remove(uri)`, `items.remove(name)` -
+            # than a file deletion, and matching it put a destructive capability
+            # on tools that never touch disk.
+            r"\bfs(?:\.promises)?\."
             r"(?:unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|rename|renameSync)\s*\("
-            r"|\b(?:os\.)?(?:remove|unlink|rmdir)\s*\(",
+            r"|\bos\.(?:remove|unlink|rmdir|removedirs|rename|replace)\s*\("
+            r"|\bPath\([^\n)]*\)\.(?:unlink|rmdir)\s*\("
+            r"|\bshutil\.(?:rmtree|move)\s*\("
+            r"|\brepo\.(?:index\.remove|git\.(?:rm|clean))\s*\(",
             re.IGNORECASE,
         ),
         True,
@@ -95,7 +120,12 @@ _API_PATTERNS: tuple[tuple[str, re.Pattern[str], bool, str], ...] = (
             r"\bfetch\s*\(|\baxios(?:\.(?:get|post|put|patch|delete|request))?\s*\("
             r"|\b(?:https?|https?x?)\.(?:get|post|put|patch|request)\s*\("
             r"|\brequests\.(?:get|post|put|patch|delete|request)\s*\("
-            r"|\burlopen\s*\(|\bsocket\.connect\s*\(",
+            r"|\burlopen\s*\(|\bsocket\.connect\s*\("
+            # Modern async clients are constructed first and called through a
+            # local name, so neither `httpx.get` nor `requests.get` appears.
+            r"|\b(?:httpx\.)?Async(?:Client|HTTPTransport)\s*\("
+            r"|\baiohttp\.ClientSession\s*\("
+            r"|\bclient\.(?:get|post|put|patch|delete|request|stream|send)\s*\(",
             re.IGNORECASE,
         ),
         False,
@@ -136,6 +166,18 @@ _API_PATTERNS: tuple[tuple[str, re.Pattern[str], bool, str], ...] = (
         "high",
     ),
 )
+
+# Helpers whose job is to decide, not to act. A path validator resolving a
+# realpath to enforce an allow-list is the guard working correctly; charging the
+# tool with "filesystem.read" for it would put a read on every single guarded
+# tool and make the matrix useless.
+#
+# The exemption is one-directional on purpose. Only read-only effects are
+# dropped: a helper called `checkAndPurge` that deletes is precisely the case a
+# reviewer must never lose, so mutating, destructive and outbound effects
+# propagate out of a guard exactly like any other call.
+_GUARD_EXEMPT = frozenset({"filesystem.read", "database.read", "environment.read"})
+
 
 _DB_CALL = re.compile(
     r"\b(?:cursor|db|database|client|pool|connection|conn)?\.?(?:query|execute|executemany|executescript)\s*\("
@@ -249,8 +291,72 @@ def _add(
     )
 
 
-def infer_capabilities(tool: Tool) -> list[CapabilityEvidence]:
-    """Infer a deterministic, evidence-backed capability list for one tool."""
+def _scan(
+    out: list[CapabilityEvidence],
+    seen: set[tuple[str, str]],
+    code: str,
+    *,
+    location: str,
+    chain: tuple[str, ...] = (),
+) -> None:
+    """Match every sink pattern in one body and record it against `location`.
+
+    `chain` is the sequence of calls that led here from the handler. It is
+    written into the evidence so a reviewer can see the effect is one or more
+    hops away rather than in the tool itself.
+    """
+    path, sep, raw_line = location.rpartition(":")
+    base = int(raw_line) if sep and raw_line.isdigit() else 0
+    trail = " -> ".join(chain)
+
+    guarded = is_guard_chain(chain)
+
+    def record(capability: str, match: re.Match[str], confidence: str, destructive: bool) -> None:
+        if guarded and capability in _GUARD_EXEMPT:
+            return
+        evidence = _short_evidence(match)
+        key = (capability, evidence.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(
+            CapabilityEvidence(
+                capability=capability,
+                evidence=f"{evidence} (via {trail})" if trail else evidence,
+                location=f"{path}:{base + code.count(chr(10), 0, match.start())}" if sep else location,
+                # An effect reached through a call chain is real but indirect;
+                # it never claims the confidence of a sink in the handler.
+                confidence="medium" if trail and confidence == "high" else confidence,
+                destructive=destructive,
+            )
+        )
+
+    for capability, pattern, destructive, confidence in _API_PATTERNS:
+        for match in pattern.finditer(code):
+            record(capability, match, confidence, destructive)
+
+    db_call = _DB_CALL.search(code)
+    if db_call:
+        destructive = _SQL_DESTRUCTIVE.search(code)
+        write = _SQL_WRITE.search(code)
+        read = _SQL_READ.search(code)
+        if destructive:
+            record("database.destructive", destructive, "high", True)
+        elif write:
+            record("database.write", write, "high", False)
+        elif read:
+            record("database.read", read, "high", False)
+        else:
+            record("database.raw-query", db_call, "medium", False)
+
+
+def infer_capabilities(tool: Tool, index: CallIndex | None = None) -> list[CapabilityEvidence]:
+    """Infer a deterministic, evidence-backed capability list for one tool.
+
+    With a `CallIndex`, sinks reached through resolvable helper calls are
+    attributed too, each carrying the chain that led to it. Without one, only
+    the handler body is read - the behaviour every caller had before P2.
+    """
     body = tool.body or ""
     if not body:
         return []
@@ -258,6 +364,15 @@ def infer_capabilities(tool: Tool) -> list[CapabilityEvidence]:
     code = _without_comments(body, hash_comments=is_python)
     out: list[CapabilityEvidence] = []
     seen: set[tuple[str, str]] = set()
+
+    if index is not None:
+        reached, unresolved = walk(code, index)
+        tool.unresolved_calls = unresolved
+        tool.guards = find_guards(code, index)
+        for hop in reached:
+            hop_python = hop.definition.location.rpartition(":")[0].lower().endswith(".py")
+            hop_code = _without_comments(hop.definition.body, hash_comments=hop_python)
+            _scan(out, seen, hop_code, location=hop.definition.location, chain=hop.chain)
 
     for capability, pattern, destructive, confidence in _API_PATTERNS:
         for match in pattern.finditer(code):
@@ -292,7 +407,13 @@ def infer_capabilities(tool: Tool) -> list[CapabilityEvidence]:
     return sorted(out, key=lambda item: (item.capability, item.location, item.evidence))
 
 
-def infer_all(tools: Iterable[Tool]) -> None:
-    """Populate each tool in place; kept separate so extraction remains pure."""
+def infer_all(tools: Iterable[Tool], files: dict[str, str] | None = None) -> None:
+    """Populate each tool in place; kept separate so extraction remains pure.
+
+    `files` enables helper-call propagation. It is optional so callers holding
+    only a tool list keep the direct-body behaviour rather than silently
+    getting a different answer.
+    """
+    index = build_index(files) if files else None
     for tool in tools:
-        tool.capabilities = infer_capabilities(tool)
+        tool.capabilities = infer_capabilities(tool, index)

@@ -63,3 +63,19 @@ def test_resolve_sources_expands_paper_and_cve():
 def test_resolve_sources_empty_for_unknown_threat():
     assert resolve_sources(ATLAS, None) == []
     assert resolve_sources(ATLAS, "MCP-T99") == []
+
+
+def test_ai_extension_threats_carry_decision_support_education():
+    by_id = threats_by_id(ATLAS)
+    for threat_id in ("AIX-T01", "AIX-T02"):
+        threat = by_id[threat_id]
+        for key in (
+            "applies_to",
+            "scenario",
+            "engine_can_establish",
+            "engine_cannot_establish",
+            "review_questions",
+            "safe_example",
+            "risky_example",
+        ):
+            assert threat.get(key), f"{threat_id} missing {key}"

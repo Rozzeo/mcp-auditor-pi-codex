@@ -22,8 +22,13 @@ RELEVANT_EXT = (
     ".php",
     ".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx",
     ".json",
-    ".md", ".mdx",
+    ".md", ".mdx", ".rst", ".txt",
+    ".yaml", ".yml", ".csv", ".xml", ".html", ".sql", ".cfg", ".ini",
     ".sh", ".bash", ".zsh", ".ps1",
+    # Python packaging. Without these, the dependency-pinning rule listed
+    # pyproject.toml as a manifest it could never actually see, and a lockfile
+    # sitting next to it could not clear the finding either.
+    ".toml", ".lock",
 )
 
 SKIP_DIRS = {
@@ -77,3 +82,39 @@ def _read_one(fpath: Path) -> tuple[str, int] | None:
     except OSError:
         return None
     return text, size
+
+
+def inventory_local(path: str, analyzed_paths: set[str] | None = None) -> list[dict]:
+    """Inventory every file in a local package without reading opaque assets.
+
+    The text loader intentionally ignores binary/media files. A skill review
+    still needs to know they exist, especially when SKILL.md references one, so
+    inventory and content loading are separate facts.
+    """
+    root = Path(path)
+    analyzed = {item.replace("\\", "/") for item in (analyzed_paths or set())}
+    if root.is_file():
+        try:
+            size = root.stat().st_size
+        except OSError:
+            size = 0
+        return [{"path": root.name, "size": size, "analyzed": root.name in analyzed}]
+
+    entries: list[dict] = []
+    if not root.is_dir():
+        return entries
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for fname in filenames:
+            fpath = Path(dirpath) / fname
+            relative = str(fpath.relative_to(root)).replace("\\", "/")
+            try:
+                size = fpath.stat().st_size
+            except OSError:
+                size = 0
+            entries.append({
+                "path": relative,
+                "size": size,
+                "analyzed": relative in analyzed,
+            })
+    return sorted(entries, key=lambda item: item["path"])

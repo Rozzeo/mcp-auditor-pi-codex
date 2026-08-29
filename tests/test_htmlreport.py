@@ -90,7 +90,7 @@ def test_html_report_end_to_end_on_fixture(tmp_path):
     out = tmp_path / "report.html"
     out.write_text(render_html(report), encoding="utf-8")
     text = out.read_text(encoding="utf-8")
-    assert "CI-001" in text and "Security score" in text
+    assert "CI-001" in text and "Static risk indicator" in text
 
 
 def test_cli_html_flag_writes_dashboard(tmp_path):
@@ -98,7 +98,24 @@ def test_cli_html_flag_writes_dashboard(tmp_path):
     runner = CliRunner()
     result = runner.invoke(main, ["audit", str(FIX / "shell-injection-server"), "--html", str(out)])
     assert result.exit_code == 0
-    assert out.exists() and "Security score" in out.read_text(encoding="utf-8")
+    assert out.exists() and "Static risk indicator" in out.read_text(encoding="utf-8")
+
+
+def test_html_report_never_turns_no_findings_into_a_safety_claim():
+    html = render_html(_report_with([], score=100))
+
+    assert "looks clean" not in html.lower()
+    assert "not a universal safety claim" in html.lower()
+
+
+def test_html_report_withholds_indicator_when_coverage_is_incomplete():
+    report = _report_with([], score=None)
+    report.message = "Coverage incomplete."
+
+    html = render_html(report)
+
+    assert "withheld" in html.lower()
+    assert "0<small>/100" not in html
 
 
 # --- playground ---------------------------------------------------------------

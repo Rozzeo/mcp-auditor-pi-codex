@@ -1,3 +1,5 @@
+import pytest
+
 from mcp_auditor.rules import load_signatures, run_rules
 from mcp_auditor.types import Tool
 
@@ -6,6 +8,17 @@ SIGS = load_signatures()
 
 def ids(findings):
     return {f.id for f in findings}
+
+
+def test_duplicate_signature_keys_are_rejected(tmp_path):
+    signatures = tmp_path / "signatures.yaml"
+    signatures.write_text(
+        "version: 1\nrules:\n  CP-001: {severity: high}\n  CP-001: {severity: low}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate key 'CP-001'"):
+        load_signatures(signatures)
 
 
 def test_tp001_flags_imperative_instruction_in_description():

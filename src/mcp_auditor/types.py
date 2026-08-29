@@ -79,6 +79,18 @@ class Tool:
     # Static capability inference. Populated after extraction, before rules and
     # optional departmental policy evaluation run.
     capabilities: list[CapabilityEvidence] = field(default_factory=list)
+    # What the capability walk refused to follow out of this handler: computed
+    # dispatch, an ambiguous name, or the depth budget. An explicit unknown,
+    # never an implied absence of effects.
+    unresolved_calls: list[str] = field(default_factory=list)
+    # Verified input guards this handler applies, each naming the function, the
+    # kind of parameter it constrains, and the enforcement it was recognized by.
+    # Rules read this instead of treating every broad schema as unconstrained.
+    guards: list[dict[str, str]] = field(default_factory=list)
+    # Extraction bookkeeping: the server object this tool was registered on, so
+    # a later pass can apply the namespace it is mounted under. Not serialized -
+    # by the time a report is written, `name` is already the wire name.
+    registry: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -93,6 +105,10 @@ class Tool:
             out["annotations"] = self.annotations
         if self.capabilities:
             out["capabilities"] = [c.to_dict() for c in self.capabilities]
+        if self.unresolved_calls:
+            out["unresolved_calls"] = self.unresolved_calls
+        if self.guards:
+            out["guards"] = self.guards
         return out
 
 
@@ -118,6 +134,10 @@ class Finding:
     # the report with its justification but is excluded from score and summary.
     suppressed: bool = False
     suppress_reason: Optional[str] = None
+    # Human-facing context copied from the versioned Atlas. It teaches why a
+    # finding matters, what static evidence proves, and what a reviewer must
+    # still establish. Detection remains valid if the Atlas is unavailable.
+    education: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -139,6 +159,8 @@ class Finding:
         if self.suppressed:
             out["suppressed"] = True
             out["suppress_reason"] = self.suppress_reason
+        if self.education:
+            out["education"] = self.education
         return out
 
 
@@ -166,6 +188,20 @@ class AuditReport:
     # Present only when an explicit auditor-side privilege policy was supplied.
     # The target can never provide or auto-enable its own policy.
     policy: Optional[dict[str, Any]] = None
+    # Extraction honesty (added in v4, additive). `coverage_gaps` lists tool
+    # registrations that were recognized but could not be resolved into a tool;
+    # `source_roles` counts the audited files by what they are. A finding count
+    # cannot be read as assurance without both.
+    coverage_gaps: Optional[list[dict[str, str]]] = None
+    source_roles: Optional[dict[str, int]] = None
+    # AI-extension package analysis (additive, v5). MCP-only reports leave these
+    # empty; skill reviews use them to distinguish a complete package review
+    # from a scan of SKILL.md alone.
+    extension_kind: str = "mcp"
+    package_inventory: list[dict[str, Any]] = field(default_factory=list)
+    package_coverage_gaps: list[dict[str, str]] = field(default_factory=list)
+    sensitive_data: list[dict[str, Any]] = field(default_factory=list)
+    data_flows: list[dict[str, Any]] = field(default_factory=list)
 
     def summary(self) -> dict[str, int]:
         counts = {sev: 0 for sev in SEVERITY_ORDER}
@@ -207,4 +243,19 @@ class AuditReport:
             ]
         if self.policy is not None:
             out["policy"] = self.policy
+        # Omitted when empty so a fully-resolved audit keeps the documented shape.
+        if self.coverage_gaps:
+            out["coverage_gaps"] = self.coverage_gaps
+        if self.source_roles:
+            out["source_roles"] = self.source_roles
+        if self.extension_kind != "mcp":
+            out["extension_kind"] = self.extension_kind
+        if self.package_inventory:
+            out["package_inventory"] = self.package_inventory
+        if self.package_coverage_gaps:
+            out["package_coverage_gaps"] = self.package_coverage_gaps
+        if self.sensitive_data:
+            out["sensitive_data"] = self.sensitive_data
+        if self.data_flows:
+            out["data_flows"] = self.data_flows
         return out

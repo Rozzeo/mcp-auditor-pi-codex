@@ -1,0 +1,74 @@
+version: 2
+name: capability-attribution-v1
+split: development
+purpose: >-
+  Small, fast regression set used to debug the extractor and CP-00x rules. It is
+  read as a change detector only: passing it is not evidence of production
+  accuracy, because it holds a handful of hand-picked handlers rather than a
+  labelled corpus. Coverage claims come from the validation split
+  (official-inventory-v1), never from here.
+description: >-
+  Ground-truth decisions for CP-001/002/003 plus the per-tool capability labels
+  that pin the filesystem handler boundary. Targets are static source fixtures
+  and are never executed.
+
+cases:
+  - id: official-filesystem-boundaries
+    target: ../tests/fixtures/official-filesystem-register-tools.ts
+    shape: ts-register-tool-literal
+    # Excerpted from modelcontextprotocol/servers at commit
+    # 599dafc1054550a6eeb87a6545c1e1b03b3ca827, src/filesystem/index.ts.
+    expected_tools:
+      - read_media_file
+      - move_file
+    capabilities:
+      # move_file calls fs.rename: it removes the source path...
+      - {tool: move_file, capability: filesystem.delete, expected: true}
+      # ...and creates the destination one.
+      - {tool: move_file, capability: filesystem.write, expected: true}
+      # The regression this fixture exists for: read_media_file sits next to
+      # move_file in the same file and must not inherit either of its sinks.
+      - {tool: read_media_file, capability: filesystem.delete, expected: false}
+      - {tool: read_media_file, capability: filesystem.write, expected: false}
+      # Reached through the readFileAsBase64Stream helper, not inline.
+      - {tool: read_media_file, capability: filesystem.read, expected: true}
+    labels:
+      - {rule: CP-001, tool: read_media_file, expected: false}
+      - {rule: CP-001, tool: move_file, expected: false}
+      - {rule: CP-002, tool: move_file, expected: false}
+      # The handler resolves args.path through validatePath() on line 39 before
+      # touching the file, so the unconstrained schema is not the whole story.
+      - rule: OP-002
+        tool: read_media_file
+        expected: false
+        known_gap: >-
+          P3: the rule reports schema breadth without checking for the
+          allowed-directory guard the handler actually applies.
+
+  - id: positive-and-negative-controls
+    target: fixtures/genuine-capability-mismatches.ts
+    shape: ts-register-tool-literal
+    expected_tools:
+      - read_only_writer
+      - safe_reader
+    capabilities:
+      # read_only_writer advertises a read-only annotation over real sinks.
+      - {tool: read_only_writer, capability: filesystem.write, expected: true}
+      - {tool: read_only_writer, capability: filesystem.delete, expected: true}
+      - {tool: read_only_writer, capability: network.outbound, expected: true}
+      # safe_reader is the hard negative: same file, same shape, no mutation.
+      - {tool: safe_reader, capability: filesystem.read, expected: true}
+      - {tool: safe_reader, capability: filesystem.write, expected: false}
+      - {tool: safe_reader, capability: filesystem.delete, expected: false}
+      - {tool: safe_reader, capability: network.outbound, expected: false}
+    labels:
+      - {rule: CP-001, tool: read_only_writer, expected: true}
+      - {rule: CP-002, tool: read_only_writer, expected: true}
+      - {rule: CP-003, tool: read_only_writer, expected: true}
+      - {rule: CP-001, tool: safe_reader, expected: false}
+      - {rule: CP-002, tool: safe_reader, expected: false}
+      - {rule: CP-003, tool: safe_reader, expected: false}
+      # safe_reader is a hard negative for the capability-mismatch rules only.
+      # It still takes a wholly unguarded path, so OP-002 is right about both.
+      - {rule: OP-002, tool: read_only_writer, expected: true}
+      - {rule: OP-002, tool: safe_reader, expected: true}

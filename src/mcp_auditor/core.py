@@ -10,12 +10,14 @@ import re
 import json
 from datetime import datetime, timezone
 
-from .atlas import load_atlas_safe, resolve_sources
+from .atlas import load_atlas_safe, resolve_sources, threats_by_id
 from .capabilities import infer_all
 from .extractor import extract
-from .loader import load_local
+from .loader import inventory_local, load_local
 from .rules import load_signatures, run_rules
 from .scorer import score_findings
+from .source_roles import role_counts
+from .skill_analysis import analyze_skill_packages
 from .types import AuditReport
 from .updater import effective_atlas_path, effective_signatures_path
 
@@ -105,8 +107,20 @@ def _detect_auth_signal(files: dict[str, str]) -> bool:
     return False
 
 
-def _evidence_type(files: dict[str, str]) -> str:
-    """Classify what the input proves; never upgrade docs/source to runtime."""
+# Files that can carry an implementation. Prose about a server is not one.
+_CODE_EXT = (".py", ".php", ".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx",
+             ".json", ".sh", ".bash", ".zsh", ".ps1", ".toml")
+
+
+def _evidence_type(files: dict[str, str], skills_detected: bool = False) -> str:
+    """Classify what the input proves; never upgrade docs/source to runtime.
+
+    A tree of prose describing an MCP server establishes what the vendor says,
+    not what the code does. Labelling that `source` would let a review packet
+    inherit an assurance its input cannot support, so it is called what it is.
+    An agent skill is the exception: a SKILL.md is the thing that runs, not a
+    description of something else that runs.
+    """
     declared = False
     for path, text in files.items():
         if not path.lower().endswith(".json"):
@@ -121,7 +135,10 @@ def _evidence_type(files: dict[str, str]) -> str:
             return "runtime"
         if data.get("_source"):
             declared = True
-    return "declared" if declared else "source"
+    if declared:
+        return "declared"
+    has_code = any(path.lower().endswith(_CODE_EXT) for path in files)
+    return "source" if has_code or skills_detected else "documentation"
 
 
 def audit(
@@ -159,18 +176,30 @@ def audit_detailed(
 ):
     """`audit()` plus the extracted tool list — used by diff mode to compare
     tool surfaces across versions. Same static-only guarantee."""
-    if _GITHUB_URL.match(target):
+    remote_target = bool(_GITHUB_URL.match(target))
+    if remote_target:
         from .fetcher import fetch_github  # imported lazily; network optional
 
-        files = fetch_github(target)
+        fetched = fetch_github(target, include_inventory=True)
+        # Keep compatibility with integrations that replace the legacy fetcher
+        # and return only the text map.
+        if isinstance(fetched, tuple):
+            files, raw_inventory = fetched
+        else:
+            files = fetched
+            raw_inventory = [
+                {"path": path, "size": len(text.encode("utf-8")), "analyzed": True}
+                for path, text in files.items()
+            ]
     else:
         _reject_non_github_url(target)
         files = load_local(target)
+        raw_inventory = inventory_local(target, set(files))
 
     extraction = extract(files)
-    infer_all(extraction.tools)
+    infer_all(extraction.tools, files=files)
     generated_at = _now_iso()
-    evidence_type = _evidence_type(files)
+    evidence_type = _evidence_type(files, skills_detected=extraction.skills_detected)
 
     if not extraction.is_mcp_server:
         return (
@@ -183,6 +212,7 @@ def audit_detailed(
                 generated_at=generated_at,
                 evidence_type=evidence_type,
                 message=_not_analyzed_message(files),
+                source_roles=role_counts(files),
             ),
             [],
         )
@@ -190,8 +220,15 @@ def audit_detailed(
     # Prefer the updated definition cache (mcp-audit update) over the bundled
     # set, unless an explicit --signatures path was given.
     signatures = load_signatures(effective_signatures_path(signatures_path))
+    package = analyze_skill_packages(files, signatures, raw_inventory)
     has_auth = _detect_auth_signal(files)
     findings = run_rules(extraction.tools, signatures, has_auth_signal=has_auth, files=files)
+    if package["extension_kind"] == "skill":
+        # ME-001 is specifically about a network-exposed MCP server. A local
+        # Codex/Claude skill has no server authentication boundary, so showing
+        # it would teach the reviewer the wrong threat model.
+        findings = [finding for finding in findings if finding.id != "ME-001"]
+    findings.extend(package["findings"])
     policy_report = None
     if policy_path:
         from .policy import evaluate_policy, load_policy, resolve_policy
@@ -211,10 +248,14 @@ def audit_detailed(
     # Best-effort: if the Atlas is missing, detection still stands, just uncited.
     atlas = load_atlas_safe(effective_atlas_path())
     if atlas:
+        atlas_threats = threats_by_id(atlas)
         for finding in findings:
             sources = resolve_sources(atlas, finding.threat_id)
             if sources:
                 finding.sources = sources
+            threat = atlas_threats.get(finding.threat_id or "")
+            if threat:
+                finding.education = _education_context(threat)
 
     if suppressions_path:
         from .suppressions import apply_suppressions, load_suppressions
@@ -222,7 +263,24 @@ def audit_detailed(
         apply_suppressions(findings, load_suppressions(suppressions_path))
 
     findings.sort(key=_finding_sort_key)
-    score = score_findings(findings)
+
+    # Coverage and assurance are separate dimensions. A 0-100 number computed
+    # over a surface that was only partly parsed reads as assurance the audit
+    # cannot support, so an incomplete extraction gets no score at all - and
+    # says why, rather than leaving a blank the reader fills in optimistically.
+    incomplete = bool(
+        extraction.coverage_gaps
+        or package["coverage_gaps"]
+        or any(tool.unresolved_calls for tool in extraction.tools)
+    )
+    score = None if incomplete else score_findings(findings)
+    message = None
+    if incomplete:
+        message = (
+            "Score withheld: the tool or package surface is incomplete. "
+            "Every registration, handler, executable, and referenced package file "
+            "must be resolved before a score means anything."
+        )
 
     return (
         AuditReport(
@@ -233,9 +291,17 @@ def audit_detailed(
             findings=findings,
             generated_at=generated_at,
             evidence_type=evidence_type,
+            message=message,
             signature_version=signatures.get("version"),
             tools=extraction.tools,
             policy=policy_report,
+            coverage_gaps=[gap.to_dict() for gap in extraction.coverage_gaps],
+            source_roles=role_counts(files),
+            extension_kind=package["extension_kind"],
+            package_inventory=package["inventory"],
+            package_coverage_gaps=package["coverage_gaps"],
+            sensitive_data=package["observations"],
+            data_flows=package["flows"],
         ),
         extraction.tools,
     )
@@ -246,3 +312,20 @@ _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 def _finding_sort_key(finding):
     return (_SEVERITY_RANK.get(finding.severity, 9), finding.id, finding.tool_name or "")
+
+
+def _education_context(threat: dict) -> dict:
+    """The decision-support subset of an Atlas entry carried by each finding."""
+    keys = (
+        "name",
+        "summary",
+        "scenario",
+        "static_detectability",
+        "engine_can_establish",
+        "engine_cannot_establish",
+        "review_questions",
+        "safe_example",
+        "risky_example",
+        "mitigations",
+    )
+    return {key: threat[key] for key in keys if threat.get(key)}

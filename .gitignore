@@ -17,8 +17,14 @@ visual-plan.html
 
 # Generated output (mcp-audit intel build-docs)
 mcp-threat-encyclopedia.html
+/mcp-playground.html
+/report.html
 
 # Generated matrices and Excel lock files
 matrix.xlsx
 matrix.csv
+/gainsight-matrix.csv
 ~$*
+
+# Locally downloaded research papers; the documentation cites canonical URLs.
+/articles/

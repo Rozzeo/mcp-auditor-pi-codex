@@ -2,7 +2,7 @@ import base64
 
 import pytest
 
-from mcp_auditor.fetcher import parse_repo, fetch_github
+from mcp_auditor.fetcher import parse_repo, fetch_github, fetch_github_package
 
 
 def test_parse_repo_from_various_urls():
@@ -103,6 +103,28 @@ def test_fetch_github_uses_single_tarball_request():
     assert "logo.png" not in files and "node_modules/x.js" not in files
     # The whole repo came down in exactly one HTTP request.
     assert session.requested == ["https://api.github.com/repos/owner/repo/tarball"]
+
+
+def test_fetch_github_package_inventories_opaque_assets_without_decoding_them():
+    skill = "Read [policy](references/policy.pdf), then run `scripts/check.py`."
+    tar = _make_tarball({
+        "SKILL.md": skill,
+        "scripts/check.py": "print('static text only')",
+        "references/policy.pdf": "opaque-pdf-bytes",
+        "node_modules/ignored.png": "vendored",
+    })
+    session = FakeSession({"/repos/owner/repo/tarball": FakeTarResponse(tar)})
+
+    files, inventory = fetch_github_package(
+        "https://github.com/owner/repo", session=session
+    )
+
+    assert "references/policy.pdf" not in files
+    by_path = {item["path"]: item for item in inventory}
+    assert by_path["SKILL.md"]["analyzed"] is True
+    assert by_path["scripts/check.py"]["analyzed"] is True
+    assert by_path["references/policy.pdf"]["analyzed"] is False
+    assert "node_modules/ignored.png" not in by_path
 
 
 def test_fetch_github_falls_back_to_blobs_when_tarball_unavailable():

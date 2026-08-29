@@ -70,7 +70,7 @@ def audit_mcp_server(
 
     Returns:
         The AuditReport as a JSON object: target, is_mcp_server, tools_analyzed,
-        score (0-100, null when the target is not an MCP server), findings
+        score (0-100, null when coverage is incomplete), findings
         (each with a confidence field: high, medium, or low), summary counts by
         severity, and generated_at.
     """

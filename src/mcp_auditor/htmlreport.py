@@ -98,7 +98,9 @@ def _score_color(score: int) -> str:
     return "var(--ink)" if score >= 80 else "var(--accent)"
 
 
-def _verdict(score: int) -> str:
+def _verdict(score: int | None) -> str:
+    if score is None:
+        return "Withheld — analysis coverage is incomplete, so a numeric indicator would be misleading."
     if score >= 80:
         return "Low risk — review the findings below before installing."
     if score >= 50:
@@ -126,8 +128,8 @@ def render_html(report: AuditReport) -> str:
         )
         return _page(report, body)
 
-    score = report.score if report.score is not None else 0
-    color = _score_color(score)
+    score = report.score
+    color = _score_color(score) if score is not None else "var(--accent)"
     summary = report.summary()
     active = [f for f in report.findings if not f.suppressed]
 
@@ -152,19 +154,29 @@ def render_html(report: AuditReport) -> str:
     )
     capability_card = _capability_card(report)
     policy_card = _policy_card(report)
+    flow_card = _flow_card(report)
 
     if report.findings:
         cards = "".join(_finding_card(f) for f in report.findings)
         findings_html = f'<div class="findings">{cards}</div>'
     else:
-        findings_html = '<div class="card clean">✓ No findings. This server looks clean.</div>'
+        findings_html = (
+            '<div class="card clean">No supported threat patterns were found in the analyzed '
+            'surface. This is not a universal safety claim; review coverage and limitations.</div>'
+        )
+
+    score_value = f'{score}<small>/100</small>' if score is not None else 'withheld'
+    meter = (
+        f'<div class="meter"><i style="width:{score}%;background:{color}"></i></div>'
+        if score is not None else ""
+    )
 
     body = f"""
 <div class="grid">
   <div class="card">
-    <h2>Security score</h2>
-    <div class="hero" style="color:{color}">{score}<small>/100</small></div>
-    <div class="meter"><i style="width:{score}%;background:{color}"></i></div>
+    <h2>Static risk indicator <small>not a safety verdict</small></h2>
+    <div class="hero" style="color:{color}">{score_value}</div>
+    {meter}
     <div class="verdict">{_verdict(score)}</div>
   </div>
   <div class="card">
@@ -177,6 +189,7 @@ def render_html(report: AuditReport) -> str:
 {bars_card}
 {capability_card}
 {policy_card}
+{flow_card}
 {findings_html}
 """
     return _page(report, body)
@@ -227,6 +240,25 @@ def _policy_card(report: AuditReport) -> str:
 </div>'''
 
 
+def _flow_card(report: AuditReport) -> str:
+    if not report.data_flows:
+        return ""
+    rows = []
+    for flow in report.data_flows:
+        rows.append(
+            '<div class="cap-row">'
+            f'<span class="cap-tool">{_esc(flow.get("source"))} → {_esc(flow.get("sink"))}</span>'
+            f'<span><b>{_esc(flow.get("status", "POSSIBLE"))}</b><br>'
+            f'{_esc(flow.get("source_evidence", {}).get("location", ""))} → '
+            f'{_esc(flow.get("sink_evidence", {}).get("location", ""))}</span></div>'
+        )
+    return (
+        '<div class="card" style="margin-bottom:16px"><h2>Sensitive data flows</h2>'
+        '<p class="meta">A possible flow requires contextual review; it does not prove runtime transmission.</p>'
+        f'<div class="cap-list">{"".join(rows)}</div></div>'
+    )
+
+
 def _finding_card(f) -> str:
     sev = severity_class(f.severity)
     flag = " attention" if attention(f.severity) else ""
@@ -246,6 +278,15 @@ def _finding_card(f) -> str:
         else ""
     )
     tool = f' <span class="badge">tool: {_esc(f.tool_name)}</span>' if f.tool_name else ""
+    education = ""
+    if f.education:
+        questions = f.education.get("review_questions") or []
+        verify = f'<p><b>Verify:</b> {_esc(questions[0])}</p>' if questions else ""
+        education = (
+            '<div class="evidence">'
+            f'<b>What this means:</b> {_esc(f.education.get("summary", f.education.get("name", "")))}'
+            f'{verify}</div>'
+        )
     return f"""
 <div class="card finding{flag}{sup_cls}">
   <div class="top">
@@ -256,6 +297,7 @@ def _finding_card(f) -> str:
   {sup_note}
   <div class="msg">{_esc(f.message)}</div>
   {evidence}
+  {education}
   <div class="fix"><b>Fix:</b> {_esc(f.recommendation)}</div>
 </div>"""
 
