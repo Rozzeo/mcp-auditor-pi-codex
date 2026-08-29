@@ -18,7 +18,14 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from .callgraph import CallIndex, build_index, find_guards, is_guard_chain, walk
+from .callgraph import (
+    CallIndex,
+    build_index,
+    external_receivers,
+    find_guards,
+    is_guard_chain,
+    walk,
+)
 from .types import CapabilityEvidence, Tool
 
 
@@ -365,10 +372,12 @@ def infer_capabilities(tool: Tool, index: CallIndex | None = None) -> list[Capab
     out: list[CapabilityEvidence] = []
     seen: set[tuple[str, str]] = set()
 
+    boundary: list[tuple[str, str]] = []
     if index is not None:
         reached, unresolved = walk(code, index)
         tool.unresolved_calls = unresolved
         tool.guards = find_guards(code, index)
+        boundary = external_receivers(code, index)
         for hop in reached:
             hop_python = hop.definition.location.rpartition(":")[0].lower().endswith(".py")
             hop_code = _without_comments(hop.definition.body, hash_comments=hop_python)
@@ -403,6 +412,15 @@ def infer_capabilities(tool: Tool, index: CallIndex | None = None) -> list[Capab
             _add(out, seen, tool, body, "database.read", read, confidence="high")
         else:
             _add(out, seen, tool, body, "database.raw-query", db_call, confidence="medium")
+
+    # Recorded only when nothing was inferred. With real sinks in hand the
+    # matrix is not misleading, and naming every imported utility alongside them
+    # would bury the rows that matter.
+    if boundary and not out:
+        tool.external_calls = [
+            f"{receiver} (from {package}, outside the repository)"
+            for receiver, package in boundary
+        ]
 
     return sorted(out, key=lambda item: (item.capability, item.location, item.evidence))
 

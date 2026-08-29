@@ -271,7 +271,10 @@ def audit_detailed(
     incomplete = bool(
         extraction.coverage_gaps
         or package["coverage_gaps"]
-        or any(tool.unresolved_calls for tool in extraction.tools)
+        or any(
+            tool.unresolved_calls or tool.external_calls
+            for tool in extraction.tools
+        )
     )
     score = None if incomplete else score_findings(findings)
     message = None

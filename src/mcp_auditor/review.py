@@ -143,7 +143,7 @@ def _capability_matrix(tools: list[Tool], refuted: set[tuple[str, str]]) -> list
 
         # An unresolved handler is not a tool without effects. Say so in the
         # matrix rather than leaving a blank a reader will take for "none".
-        if tool.unresolved_calls:
+        if tool.unresolved_calls or tool.external_calls:
             rows.append({
                 "tool": tool.name,
                 "capability": "*",
@@ -153,7 +153,7 @@ def _capability_matrix(tools: list[Tool], refuted: set[tuple[str, str]]) -> list
                 "confidence": "none",
                 "destructive": False,
                 "constraint": guard_note,
-                "notes": "; ".join(tool.unresolved_calls),
+                "notes": "; ".join(tool.unresolved_calls + tool.external_calls),
             })
     return rows
 
@@ -191,7 +191,9 @@ def _contradictions(tools: list[Tool]) -> list[dict[str, Any]]:
 def _coverage(report: AuditReport, tools: list[Tool]) -> dict[str, Any]:
     """What the audit did and did not manage to look at."""
     unresolved_registrations = len(report.coverage_gaps or [])
-    unresolved_handlers = sorted(tool.name for tool in tools if tool.unresolved_calls)
+    unresolved_handlers = sorted(
+        tool.name for tool in tools if tool.unresolved_calls or tool.external_calls
+    )
     package_gaps = list(report.package_coverage_gaps)
     package_files = list(report.package_inventory)
     return {
@@ -204,6 +206,19 @@ def _coverage(report: AuditReport, tools: list[Tool]) -> dict[str, Any]:
         "package_coverage_gaps": package_gaps,
         "complete": not unresolved_registrations and not unresolved_handlers and not package_gaps,
     }
+
+
+def _reason_kind(note: str) -> str:
+    """The class of obstacle a note describes, for grouping the questionnaire."""
+    if "outside the repository" in note:
+        return "the effect is in an installed package this analysis does not read"
+    if "ambiguous" in note:
+        return "a helper name resolves to more than one definition in the tree"
+    if "dynamic dispatch" in note:
+        return "the call target is decided at runtime"
+    if "depth limit" in note:
+        return "the call chain runs deeper than the analysis follows"
+    return note
 
 
 def _questions(report: AuditReport, tools: list[Tool]) -> list[dict[str, str]]:
@@ -219,17 +234,41 @@ def _questions(report: AuditReport, tools: list[Tool]) -> list[dict[str, str]]:
             ),
             "evidence_requested": "the resolved tool name, schema, and handler source",
         })
+    # Grouped by reason. A server whose ninety-eight tools all reach the same
+    # package raises one question, not ninety-eight copies of it - a
+    # questionnaire nobody finishes reading is not evidence gathering. The
+    # capability matrix still carries a row per tool, because that is read one
+    # tool at a time.
+    by_reason: dict[str, list[Tool]] = {}
+    examples: dict[str, str] = {}
     for tool in tools:
-        if not tool.unresolved_calls:
+        notes = tool.unresolved_calls + tool.external_calls
+        if not notes:
             continue
+        # Grouped by the *kind* of obstacle, not its exact wording. Ninety-eight
+        # tools blocked by ninety-eight differently-named ambiguous helpers are
+        # one question about ambiguity, not ninety-eight questions.
+        kind = "; ".join(sorted({_reason_kind(note) for note in notes}))
+        by_reason.setdefault(kind, []).append(tool)
+        examples.setdefault(kind, notes[0])
+
+    for reason, affected in by_reason.items():
+        reason = f"{reason}; for example {examples[reason]}"
+        names = [tool.name for tool in affected]
+        if len(affected) == 1:
+            subject = f"The handler for '{names[0]}' at {affected[0].location}"
+        else:
+            listed = ", ".join(names[:5])
+            more = f", and {len(names) - 5} more" if len(names) > 5 else ""
+            subject = f"The handlers for {len(names)} tools ({listed}{more})"
         questions.append({
-            "topic": f"tool: {tool.name}",
+            "topic": f"tool: {names[0]}" if len(affected) == 1 else f"{len(names)} tools",
+            "tools": names,
             "question": (
-                f"The handler for '{tool.name}' at {tool.location} could not be followed "
-                f"to its effects ({'; '.join(tool.unresolved_calls)}). What does it read, "
-                f"write, delete, execute, or send externally?"
+                f"{subject} could not be followed to their effects ({reason}). "
+                f"What do they read, write, delete, execute, or send externally?"
             ),
-            "evidence_requested": "the concrete call targets, or a runtime capture of the tool",
+            "evidence_requested": "the concrete call targets, or a runtime capture of the tools",
         })
     for gap in report.package_coverage_gaps:
         questions.append({

@@ -298,7 +298,10 @@ def _body_brace(text: str, pos: int, limit: int = 400) -> int:
     return -1
 
 
-_RECEIVER_CALL = re.compile(r"\b([A-Za-z_$][\w$]*)\s*\.\s*[A-Za-z_$][\w$]*\s*\(")
+_RECEIVER_CALL = re.compile(
+    r"\b([A-Za-z_$][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)\s*\("
+)
+_MCP_REGISTRATION_METHODS = {"registerTool", "registerToolTask", "tool", "setRequestHandler"}
 
 
 def external_receivers(body: str, index: "CallIndex") -> list[tuple[str, str]]:
@@ -310,8 +313,17 @@ def external_receivers(body: str, index: "CallIndex") -> list[tuple[str, str]]:
     """
     found: dict[str, str] = {}
     for match in _RECEIVER_CALL.finditer(body):
-        receiver = match.group(1)
+        receiver, method = match.groups()
         package = index.external_sources.get(receiver)
+        if (
+            package
+            and "modelcontextprotocol" in package.lower()
+            and method in _MCP_REGISTRATION_METHODS
+        ):
+            # The extractor currently keeps the complete registration call as
+            # the handler surface. Registering the handler is framework setup,
+            # not an effect performed when the tool itself runs.
+            continue
         if package:
             found.setdefault(receiver, package)
     for name in called_names(body):
@@ -371,16 +383,6 @@ def walk(body: str, index: CallIndex, max_depth: int = MAX_DEPTH) -> tuple[list[
                 if note not in unresolved:
                     unresolved.append(note)
             continue
-
-        # The walk stops at the repository edge by design, but stopping silently
-        # is what makes an unanalysed handler look effect-free. Only the
-        # handler's own calls are reported: an external call three hops down
-        # says little about the tool a reviewer is looking at.
-        if depth == 0:
-            for receiver, package in external_receivers(current, index):
-                note = f"{receiver} (from {package}, outside the repository)"
-                if note not in unresolved:
-                    unresolved.append(note)
 
         for name in called_names(current):
             if name in index.external:

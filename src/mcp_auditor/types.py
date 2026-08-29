@@ -83,6 +83,10 @@ class Tool:
     # dispatch, an ambiguous name, or the depth budget. An explicit unknown,
     # never an implied absence of effects.
     unresolved_calls: list[str] = field(default_factory=list)
+    # Calls this handler makes into an installed package. Not a failure - it is
+    # where the analysis is defined to stop - but it is the reason an empty
+    # capability list must not be read as "this tool has no effects".
+    external_calls: list[str] = field(default_factory=list)
     # Verified input guards this handler applies, each naming the function, the
     # kind of parameter it constrains, and the enforcement it was recognized by.
     # Rules read this instead of treating every broad schema as unconstrained.
@@ -107,6 +111,8 @@ class Tool:
             out["capabilities"] = [c.to_dict() for c in self.capabilities]
         if self.unresolved_calls:
             out["unresolved_calls"] = self.unresolved_calls
+        if self.external_calls:
+            out["external_calls"] = self.external_calls
         if self.guards:
             out["guards"] = self.guards
         return out

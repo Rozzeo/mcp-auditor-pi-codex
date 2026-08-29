@@ -408,8 +408,8 @@ Both the prediction and its retraction were unreliable; the measurement that
 stands is the one from the independently labelled dataset.
 
 **This corpus is now spent for tuning.** Any change made to improve these
-numbers fits the engine to it. `external-holdout-v2` was built for that reason
-and has not been run.
+numbers fits the engine to it. `external-holdout-v2` was built for that reason,
+kept unrun while the fixes were made, and evaluated once afterwards - see §6.5.
 
 ### 6.5 Second holdout, after the fixes (2026-08-29)
 
@@ -665,12 +665,24 @@ collapses (11.1%). It also caught a labelling error that a single dataset could
 not have caught.
 
 The next honest step follows from that result, and it is **not** to fix the gaps
-it exposed. Fixing them against this corpus fits the engine to it. The order
-is: build a second holdout first, then close the low-level TypeScript body gap,
-decide what a capability claim should mean when the effect lives in a
-third-party package, and re-examine every metadata-matching rule - starting with
-TP-003's case sensitivity - then measure on the corpus that was never used to
-choose.
+it exposed. Fixing them against this corpus fits the engine to it. The order was: build a second holdout first, then make the changes, then measure
+on the corpus that was never used to choose. That has now happened - §6.5 - and
+it is the only reason any of those changes can be said to work.
+
+What that round closed, and what it did not:
+
+| | Status |
+|---|---|
+| Namespace mounts (`mount(x, namespace=...)`) | Closed; measured on unseen code |
+| `TP-003` case sensitivity | Closed; zero firings on 48 unfamiliar tools |
+| Indirect tool arrays (const-bound, factory) | Closed; 33/33 on an unseen server |
+| Effects behind a package boundary | **Open by design.** The walk stops at the repository edge; what changed is that it now says so, instead of leaving an empty capability list that reads as "no effects". |
+| `registerTool(toolObject.name, ...)` | **Open.** Recorded in §6.5, deliberately not fixed. |
+| `pnpm-lock.yaml` unknown to `RP-001` | **Open.** Reproduced on two repositories. |
+
+The last two are left alone on purpose. Both holdouts are spent, so a fix aimed
+at either would be fitted to a corpus whose answers are already known. They are
+the first items for the round that follows a third holdout, not this one.
 
 It is worth stating plainly what §6.3's six-defect list and this section add up
 to. The engine reached 100% on all three views of the validation split, and that

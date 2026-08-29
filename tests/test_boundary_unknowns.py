@@ -59,7 +59,7 @@ def test_a_call_into_a_third_party_package_is_recorded_as_unknown():
     tool = _tool(THIRD_PARTY)
 
     assert tool.capabilities == []
-    assert any("atlassian" in note for note in tool.unresolved_calls)
+    assert any("atlassian" in note for note in tool.external_calls)
 
 
 def test_a_tool_that_genuinely_does_nothing_stays_silent():
@@ -68,14 +68,14 @@ def test_a_tool_that_genuinely_does_nothing_stays_silent():
     tool = _tool(PURE)
 
     assert tool.capabilities == []
-    assert tool.unresolved_calls == []
+    assert tool.unresolved_calls == [] and tool.external_calls == []
 
 
 def test_a_call_the_walk_resolved_is_not_also_reported_unknown():
     tool = _tool(RESOLVED)
 
     assert {e.capability for e in tool.capabilities} == {"filesystem.write"}
-    assert tool.unresolved_calls == []
+    assert tool.unresolved_calls == [] and tool.external_calls == []
 
 
 def test_the_review_packet_turns_the_boundary_into_a_question(tmp_path):
@@ -83,8 +83,26 @@ def test_the_review_packet_turns_the_boundary_into_a_question(tmp_path):
     from mcp_auditor.review import build_packet
 
     (tmp_path / "server.py").write_text(THIRD_PARTY, encoding="utf-8")
-    packet = build_packet(audit(str(tmp_path)))
+    report = audit(str(tmp_path))
+    packet = build_packet(report)
 
     row = next(r for r in packet["capability_matrix"] if r["tool"] == "get_issue")
     assert row["evidence_status"] == "UNKNOWN"
     assert any("get_issue" in q["question"] for q in packet["questions"])
+    assert report.score is None
+
+
+def test_mcp_registration_call_is_not_a_runtime_boundary(tmp_path):
+    from mcp_auditor.core import audit
+
+    source = '''
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+server.registerTool("noop", { description: "No operation." }, async () => ({}));
+'''
+    (tmp_path / "index.ts").write_text(source, encoding="utf-8")
+
+    report = audit(str(tmp_path))
+
+    assert report.tools[0].external_calls == []
+    assert isinstance(report.score, int)
