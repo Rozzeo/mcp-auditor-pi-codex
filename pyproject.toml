@@ -1,12 +1,22 @@
 [project]
-name = "mcp-auditor"
-version = "0.1.0"
-description = "Static security auditor for MCP servers: detects tool poisoning and over-privileged tools."
+name = "mcp-auditor-static"
+version = "0.2.0"
+description = "Evidence-backed static review engine for MCP servers and AI skill packages."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Roza" }]
-keywords = ["mcp", "security", "audit", "tool-poisoning", "llm"]
+keywords = ["mcp", "security", "audit", "tool-poisoning", "llm", "agent-skills"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Security",
+]
 dependencies = [
     "click>=8.0",
     "rich>=13.0",
@@ -17,6 +27,12 @@ dependencies = [
 [project.scripts]
 mcp-audit = "mcp_auditor.cli:main"
 mcp-audit-server = "mcp_auditor.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/Rozzeo/mcp-auditor-pi-codex"
+Repository = "https://github.com/Rozzeo/mcp-auditor-pi-codex"
+Issues = "https://github.com/Rozzeo/mcp-auditor-pi-codex/issues"
+Documentation = "https://github.com/Rozzeo/mcp-auditor-pi-codex#readme"
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.12.4,<1.13", "anyio>=4.5,<4.14"]

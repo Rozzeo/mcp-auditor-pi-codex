@@ -3,7 +3,7 @@
 **For:** Claude Code (context) / project planning
 **Date:** 2026-06-26
 **Relationship to MVP:** This file is the long-term plan. The vertical slice in
-`1-MVP-mcp-auditor.md` is phase 1. Do NOT build anything here until the MVP
+`MVP.md` is phase 1. Do NOT build anything here until the MVP
 passes its acceptance criteria. This file exists so architectural decisions in
 the MVP don't paint us into a corner.
 
@@ -49,7 +49,7 @@ explainable rule-based detection as the primary mechanism, and the stable
 
 ---
 
-## Phase 1 — MVP (see `1-MVP-mcp-auditor.md`)
+## Phase 1 — MVP (see `MVP.md`)
 
 CLI. Local-path + GitHub-URL input. Static extractor for Python/JS/TS/manifest
 MCP servers. Rule-based detection of tool poisoning + over-privilege. Score +

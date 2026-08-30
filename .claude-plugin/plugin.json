@@ -1,6 +1,6 @@
 {
   "name": "mcp-auditor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Audit MCP servers before you trust them: static detection of tool poisoning and over-privileged tools, with a 0-100 security score. Exposes audit_mcp_server, list_rules, list_threats, and explain_threat tools plus an /audit-mcp command. Never executes the audited server.",
   "author": { "name": "Roza" },
   "keywords": ["mcp", "security", "audit", "tool-poisoning"],
