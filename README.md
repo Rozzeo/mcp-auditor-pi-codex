@@ -91,12 +91,17 @@ runtime-testing product. **Do not `pip install mcp-auditor`.**
 ## Check it worked
 
 ```powershell
-mcp-audit --help
+mcp-audit doctor
 ```
 
-If that prints a command list, you are done. If not, see
-[Troubleshooting](#troubleshooting) — it covers the three ways this fails and
-what each one means.
+`doctor` answers the questions an error message never does: which interpreter is
+running, whether more than one `mcp-audit` is on PATH and which one wins, which
+dependencies are present, and which threat-definition version you are actually
+detecting with. It exits non-zero if something is genuinely broken, so it works
+as a CI check too. `mcp-audit doctor --json` gives the same thing machine-readably.
+
+If `mcp-audit` itself is not found, run `python -m mcp_auditor doctor` — that
+form never depends on PATH — and see [Troubleshooting](#troubleshooting).
 
 ## Your first audit
 
@@ -136,6 +141,7 @@ For GitHub targets, set `GITHUB_TOKEN` to raise the API rate limit. Optional.
 | `mcp-audit intel build-docs` | Build the Threat Encyclopedia from the Atlas. |
 | `mcp-audit update` | Refresh threat definitions without upgrading the package. |
 | `mcp-audit benchmark` | Score the detectors against the labelled benchmark sets. |
+| `mcp-audit doctor` | Diagnose this installation: interpreter, PATH, dependencies, definitions. |
 
 `--help` works on every one of them.
 
@@ -257,8 +263,8 @@ above). You do not need to move folders or reinstall Python.
 
 ### `mcp-audit` runs, but behaves like an old version
 
-You have more than one copy installed and an older one is earlier on PATH. List
-them all:
+You have more than one copy installed and an older one is earlier on PATH.
+`mcp-audit doctor` says so outright; to see the list yourself:
 
 ```powershell
 Get-Command mcp-audit -All | Select-Object Source     # PowerShell
