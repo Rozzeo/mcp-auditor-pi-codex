@@ -206,7 +206,9 @@ select { font-family: var(--mono); }
   position: relative; background: var(--ink); color: var(--cream);
   border-left: 6px solid var(--orange); box-shadow: 4px 4px 0 var(--orange);
   padding: 16px 16px 14px 18px; margin: 20px 0 14px;
-  font: 12.5px/1.6 var(--mono); white-space: pre-wrap; overflow-x: auto; word-break: break-word;
+  /* No `overflow-x`: it would clip the ::before tag hanging above the block.
+     See the same note on `.prompt` in _theme.py. */
+  font: 12.5px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
 }
 .evidence::before {
   content: 'Evidence'; position: absolute; top: -13px; left: 16px;

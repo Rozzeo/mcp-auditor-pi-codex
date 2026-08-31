@@ -238,7 +238,12 @@ COMPONENTS_CSS = """
   box-shadow: 5px 5px 0 var(--orange);
   padding: 20px 24px 20px 28px;
   font-family: var(--mono); font-size: 13px; line-height: 1.6;
-  white-space: pre-wrap; overflow-x: auto; word-break: break-word;
+  /* No `overflow-x` here. Any non-visible overflow establishes a clipping
+     context, and the filing tag below deliberately hangs 14px above the
+     block's own top edge -- so scrolling the block cut the tag in half.
+     `pre-wrap` plus `anywhere` already contain a long line, including an
+     unbroken URL, without needing to scroll. */
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
   margin-top: 22px;
 }
 .prompt::before {
