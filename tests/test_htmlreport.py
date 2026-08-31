@@ -53,6 +53,37 @@ def test_html_report_contains_score_and_finding():
     assert html.startswith("<!doctype html>")
     assert "40" in html and "SQ-001" in html and "MCP-T07" in html
     assert "signatures v4" in html
+    # The score is the page's chapter heading — a tier banner, not a number in
+    # a rounded box.
+    assert 'class="tier hero"' in html
+    assert "40<small>/100</small>" in html
+    # Severity always carries its written label; the chip's fill is confirmation.
+    assert '<span class="chip critical">critical</span>' in html
+
+
+def test_html_report_wears_the_house_style():
+    """Cream paper, grain, one font link, hard offset shadows, a stamped close.
+
+    These are the marks that make the report, the encyclopedia and the
+    playground read as one series when opened in three tabs.
+    """
+    html = render_html(_report_with([_finding()]))
+    assert 'class="grain"' in html and 'class="stripes"' in html
+    assert html.count("fonts.googleapis.com") == 1
+    assert "#f4ead5" in html                                # cream is the ground
+    assert "box-shadow: 6px 6px 0 var(--orange)" in html    # the signature block
+    assert 'class="stamped"' in html and 'class="stamp"' in html
+    assert "prefers-color-scheme" not in html               # one committed look
+    assert "var(--accent)" not in html                      # the old token is gone
+
+
+def test_html_report_renders_evidence_as_an_ink_block_and_the_fix_in_green():
+    html = render_html(_report_with([_finding()]))
+    assert '<div class="prompt" data-tag="Evidence">' in html
+    assert "SELECT * FROM users" in html
+    # --multipass-green means exactly one thing: this is the safe pattern.
+    assert "border-left: 6px solid var(--multipass-green)" in html
+    assert "<b>Fix:</b>" in html
 
 
 def test_html_report_escapes_hostile_metadata():
@@ -66,6 +97,9 @@ def test_html_report_marks_suppressed_findings():
     sup = _finding(suppressed=True, suppress_reason="reviewed: test fixture")
     html = render_html(_report_with([sup], score=100))
     assert "Suppressed" in html and "reviewed: test fixture" in html
+    # Still on the page, struck through — a suppressed finding is never dropped.
+    assert "SQ-001" in html and "finding critical attention suppressed" in html
+    assert ".suppressed .msg { text-decoration: line-through; }" in html
 
 
 def test_html_report_handles_non_mcp_target():
@@ -75,6 +109,7 @@ def test_html_report_handles_non_mcp_target():
     )
     html = render_html(report)
     assert "Not an MCP server" in html
+    assert 'data-label="Notice"' in html  # a labelled block, not a bare paragraph
 
 
 def test_html_report_does_not_label_runtime_capture_as_static():
@@ -116,6 +151,9 @@ def test_html_report_withholds_indicator_when_coverage_is_incomplete():
 
     assert "withheld" in html.lower()
     assert "0<small>/100" not in html
+    # The banner says so in words rather than showing a zero-width meter.
+    assert 'class="withheld"' in html
+    assert '<div class="meter">' not in html
 
 
 # --- playground ---------------------------------------------------------------
@@ -141,6 +179,19 @@ def test_playground_payload_is_valid_json():
 def test_playground_has_recommendations_panel():
     html = build_playground(load_signatures())
     assert "What to fix first" in html and "renderRecs" in html
+
+
+def test_playground_wears_the_house_style():
+    html = build_playground(load_signatures())
+    assert 'class="grain"' in html and 'class="stripes"' in html
+    assert html.count("fonts.googleapis.com") == 1
+    assert "#f4ead5" in html
+    assert 'class="stamped"' in html
+    assert "prefers-color-scheme" not in html
+    # The inline engine paints the score with a live palette token: a stale
+    # `var(--accent)` would silently render as transparent.
+    assert "var(--accent)" not in html
+    assert 'const color = score >= 80 ? "var(--ink)" : "var(--red)";' in html
 
 
 def test_cli_playground_command(tmp_path):
