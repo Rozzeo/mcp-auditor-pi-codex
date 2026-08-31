@@ -10,61 +10,93 @@ MCP, мы статически проверяем «может ли он сли�
 - **Каждый день** (проверка): код MCP → загрузка → извлечение тулов → правила →
   скор 0–100 → отчёт.
 
+Пакет лежит **в корне репозитория** (не в `src/`): так `python -m mcp_auditor`
+работает прямо из папки проекта, без установки и без участия PATH.
+
 ```
-my/
+mcp-auditor-pi-codex/
 ├── mcp_auditor/              ← ВЕСЬ КОД. Конвейер: загрузка → извлечение → правила → скор → вывод
-│   ├── cli.py                ← команды: mcp-audit <target> | diff | playground | update | intel
-│   ├── core.py               ← точка входа: audit(target) — дирижёр конвейера;
+│   ├── cli.py                ← команды: audit | review | diff | matrix | installed |
+│   │                            playground | intel | update | benchmark | wordpress-runtime
+│   ├── __main__.py           ← точка входа для `python -m mcp_auditor`
+│   ├── core.py               ← audit(target) — дирижёр конвейера;
 │   │                            все интерфейсы (CLI/HTML/MCP) зовут только её
+│   ├── types.py              ← общие структуры: Tool, Finding, AuditReport, SEVERITY_ORDER
 │   │
 │   │   # 1. Загрузка (только чтение, НИКОГДА не исполняем проверяемый код)
 │   ├── loader.py             ←   локальные папки/файлы
 │   ├── fetcher.py            ←   GitHub по URL (один tarball-запрос; можно проверять чужие репо)
-│   ├── extractor.py          ← 2. Достаёт «анкеты» тулов из Python/TS/JSON И скиллов
-│   │                            (SKILL.md): имя, описание, параметры, тело — парсинг, не запуск
+│   ├── discovery.py          ←   `mcp-audit installed` — что уже подключено на этой машине
+│   ├── source_roles.py       ←   какой файл чем является (хендлер / тест / пример / вендор)
+│   │
+│   │   # 2. Извлечение поверхности
+│   ├── extractor.py          ←   «анкеты» тулов из Python/TS/JSON и скиллов (SKILL.md):
+│   │                            имя, описание, параметры, тело — парсинг, не запуск
+│   ├── jsscan.py             ←   разбор JS/TS: registerTool / .tool() / setRequestHandler
+│   ├── callgraph.py          ←   кто кого зовёт внутри хендлера — нужно для привязки capability
+│   ├── skill_analysis.py     ←   разбор agent-skill пакетов (SKILL.md + скрипты + references)
 │   ├── capabilities.py       ←   выводит read/write/delete/network/exec/db/secrets
 │   │                            из тела и сохраняет evidence + confidence
+│   ├── provenance.py         ←   происхождение поверхности: сверка списка тулов с источником
 │   │
 │   │   # 3. Мозг — детекция
 │   ├── signatures.yaml       ←   база знаний: паттерны всех правил (правится без кода)
 │   ├── rules.py              ←   движок: прикладывает каждый паттерн к каждому тулу
 │   ├── threats.yaml          ←   Атлас угроз MCP-T01..T16 (с цитатами из исследований)
 │   ├── atlas.py              ←   привязка находок к Атласу (откуда знаем про атаку)
-│   ├── scorer.py             ← 4. Скор ПРОВЕРЯЕМОГО СЕРВЕРА: 100 − 40·critical − 20·high − 10·medium
+│   ├── scorer.py             ← 4. Скор: 100 − 40·critical − 20·high − 10·medium;
+│   │                            при неполном покрытии скор НЕ выдаётся (None), а не завышается
 │   ├── suppressions.py       ←   подавление проверенных false positives (с обоснованием)
 │   ├── policy.py             ←   privilege list: отдел → роль → сотрудник → main/helper;
 │   │                            allow только сужается, deny всегда побеждает
+│   ├── review.py             ←   `mcp-audit review` — пакет доказательств для человека
+│   ├── benchmark.py          ←   прогон детекторов по размеченным наборам из benchmarks/
+│   ├── wordpress_runtime.py  ←   снятие и аудит реальной поверхности WordPress MCP
 │   │
 │   │   # 5. Вывод
 │   ├── reporter.py           ←   терминал (rich)
+│   ├── _theme.py             ←   ОДИН источник правды для стиля всех HTML-страниц
+│   │                            (палитра, шрифты, компоненты) — см. skills/retro-futurist-…
 │   ├── htmlreport.py         ←   HTML-дашборд (--html) — показать коллегам/приложить к тикету
+│   ├── encyclopedia.py       ←   HTML-энциклопедия угроз из Атласа (intel build-docs)
 │   ├── playground.py         ←   интерактивный playground (вставь тул — увидь находки вживую)
+│   ├── matrix.py             ←   матрица одобрения коннекторов (CSV/XLSX) для InfoSec
 │   ├── diffmode.py           ←   diff двух версий — ловит rug pull («был чистый при
 │   │                            установке, стал вредоносным после обновления»)
-│   ├── _theme.py             ←   общие цвета/токены для HTML-поверхностей
 │   │
 │   ├── mcp_server.py         ← аудитор сам как MCP-сервер (агент проверяет MCP до подключения)
 │   ├── updater.py            ← mcp-audit update — свежие сигнатуры без обновления пакета
-│   ├── encyclopedia.py       ← генератор HTML-энциклопедии угроз из Атласа
-│   └── intel/                ← разведка угроз: arXiv/CVE → очередь → ревью → сигнатуры;
-│                                статьи ранжируются по уровню площадки (top / ranked /
+│   └── intel/                ← разведка угроз: arXiv/CVE/блоги/HN → очередь → ревью → сигнатуры;
+│                                источники ранжируются по уровню площадки (top / ranked /
 │                                preprint, CVE = advisory), фильтр: intel fetch --min-tier
 │
-├── tests/                    ← 185 тестов; fixtures/ — образцы серверов (чистый, заражённый…)
-├── skills/ commands/ .claude-plugin/  ← интеграция с Claude Code (плагин, /audit-mcp, triage-скилл)
-├── dist/                     ← сгенерированное: playground, примеры отчётов, wheel (в git не попадает)
-└── docs/, *.md               ← спека MVP, роадмап, README, эта карта
+├── tests/                    ← регрессия и детекторы; fixtures/ — образцы серверов и скиллов
+│                                (чистый, заражённый, typosquat, SQL-инъекция…)
+├── benchmarks/               ← размеченные наборы: development / validation / holdout
+├── skills/
+│   ├── vetting-mcp-servers/          ← как проводить ревью и читать находки
+│   └── retro-futurist-editorial-html/ ← фирменный стиль HTML-страниц (палитра, компоненты)
+├── commands/, .claude-plugin/ ← интеграция с Claude Code (плагин, /audit-mcp)
+├── examples/                 ← примеры политик и снятых инвентарей тулов
+└── docs/                     ← REFERENCE, план review-ассистента, политика привилегий,
+                                история MVP и роадмапа, эта карта
 ```
 
 Запомнить просто: **yaml-файлы — «что ищем», rules.py — «как ищем»,
 core.py — дирижёр, остальное — входы и выходы.**
+
+Генерируемое в git не попадает: `report.html`, `mcp-playground.html`,
+`mcp-threat-encyclopedia.html`, `matrix.csv/xlsx`, `dist/`, `.venv/`, `articles/`.
 
 ## Словарик
 
 - **Тул (tool)** — инструмент, который MCP-сервер предлагает агенту
   (`send_email`, `run_query`). Единица проверки.
 - **Сигнатура** — примета атаки (регэксп-паттерн) в signatures.yaml.
-- **Скор** — оценка безопасности сервера 0–100 (100 = чисто).
+- **Скор** — оценка безопасности сервера 0–100 (100 = чисто). Если движок не
+  смог прочитать часть поверхности, скор не выдаётся вовсе.
+- **Capability** — что тул реально может: чтение/запись файлов, сеть, запуск
+  процессов, БД, секреты. Выводится из тела хендлера, а не из аннотаций.
 - **Rug pull** — «выдернуть ковёр»: чистый при одобрении сервер становится
   вредоносным в обновлении. Ловится `mcp-audit diff baseline.json ./server`.
 - **Intel** — threat intelligence, разведка: автоматический сбор новых

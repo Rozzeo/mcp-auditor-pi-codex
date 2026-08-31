@@ -45,7 +45,14 @@ jobs:
           name: release-distributions
           path: dist/
           if-no-files-found: error
+      # `create` alone fails when the release already exists; `upload` alone
+      # fails when it does not. A tag push can arrive either way -- re-running a
+      # failed release, or tagging fresh -- so create it only if it is missing.
       - name: Create GitHub Release and attach distributions
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.ref_name }}" dist/* --clobber
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --verify-tag --generate-notes
+          gh release upload "$TAG" dist/* --clobber
