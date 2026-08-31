@@ -190,7 +190,7 @@ the GitHub archive or a wheel from GitHub Releases.
 
 | Path | Why it exists |
 |---|---|
-| `src/mcp_auditor/` | The complete Python product. |
+| `mcp_auditor/` | The complete Python product. |
 | `tests/` | Regression and security-detector tests. |
 | `benchmarks/` | Labelled development, validation, and holdout evaluations. |
 | `docs/` | Detailed reference, evidence model, plans, and policies. |

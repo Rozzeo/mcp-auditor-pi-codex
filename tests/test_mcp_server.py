@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SERVER_PARAMS = StdioServerParameters(
     command=sys.executable,
     args=["-m", "mcp_auditor.mcp_server"],
-    env={"PYTHONPATH": str(REPO_ROOT / "src")},
+    env={"PYTHONPATH": str(REPO_ROOT)},
 )
 
 EXPECTED_TOOLS = {

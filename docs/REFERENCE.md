@@ -77,11 +77,11 @@ mcp-audit intel build-docs \
 ```
 
 The versioned source of truth is
-[`src/mcp_auditor/threats.yaml`](../src/mcp_auditor/threats.yaml). It records each
+[`mcp_auditor/threats.yaml`](../mcp_auditor/threats.yaml). It records each
 `MCP-T##` threat, aliases, lifecycle phase, attacker model, severity, static
 detectability, mitigations, detecting rule IDs, and citations. Detection logic
 lives separately in
-[`src/mcp_auditor/signatures.yaml`](../src/mcp_auditor/signatures.yaml). Atlas and
+[`mcp_auditor/signatures.yaml`](../mcp_auditor/signatures.yaml). Atlas and
 signature versions move in lockstep so an audit can state exactly which
 knowledge version produced it.
 
@@ -629,7 +629,7 @@ weight: critical = 40, high = 20, medium = 10, low = 5, info = 0
 Higher means fewer weighted findings among the supported patterns on the
 analyzed surface. It does **not** mean universally safer. Because info-level
 findings subtract 0, an otherwise clean server with only ME-001 still scores 100. The formula lives in
-[`scorer.py`](../src/mcp_auditor/scorer.py) and is covered by tests.
+[`scorer.py`](../mcp_auditor/scorer.py) and is covered by tests.
 
 The score is a **risk-prioritization heuristic**, not a probability that a
 server is safe and not a measurement of detector accuracy. It does not use
@@ -825,7 +825,7 @@ misleading number.
 ## How to add a signature
 
 Detection patterns live in
-[`src/mcp_auditor/signatures.yaml`](../src/mcp_auditor/signatures.yaml) so you can
+[`mcp_auditor/signatures.yaml`](../mcp_auditor/signatures.yaml) so you can
 extend rules **without touching code**. Each rule has a `category`, `severity`,
 `message`, `recommendation`, and rule-specific pattern lists.
 

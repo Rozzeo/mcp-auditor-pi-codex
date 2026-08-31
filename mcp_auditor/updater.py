@@ -18,7 +18,7 @@ import yaml
 
 # Override with the MCP_AUDIT_DEFS_URL env var (e.g. to point at a fork/release).
 DEFAULT_BASE_URL = (
-    "https://raw.githubusercontent.com/Rozzeo/mcp-auditor/main/src/mcp_auditor"
+    "https://raw.githubusercontent.com/Rozzeo/mcp-auditor-pi-codex/main/mcp_auditor"
 )
 DEFINITION_FILES = ("signatures.yaml", "threats.yaml")
 _TIMEOUT = 20

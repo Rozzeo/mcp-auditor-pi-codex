@@ -994,7 +994,7 @@ def intel_curate(queue_path: str | None, atlas_path: str | None, limit: int | No
 
     if drafts:
         n = merge_into_atlas(drafts, atlas_path=atlas_path)
-        console.print(f"[green]{n} entrie(s) merged[/green] into {atlas_path or 'src/mcp_auditor/threats.yaml'}.")
+        console.print(f"[green]{n} entrie(s) merged[/green] into {atlas_path or 'mcp_auditor/threats.yaml'}.")
     else:
         console.print("[dim]Nothing merged.[/dim]")
     console.print(f"[dim]{len(remaining)} candidate(s) left in the queue.[/dim]")
@@ -1104,7 +1104,7 @@ def intel_autodraft(
 
     n = merge_into_atlas(result.included, atlas_path=atlas_path)
     err.print(
-        f"[green]{n} entrie(s) merged[/green] -> {atlas_path or 'src/mcp_auditor/threats.yaml'} "
+        f"[green]{n} entrie(s) merged[/green] -> {atlas_path or 'mcp_auditor/threats.yaml'} "
         f"(needs_review: true, rules: [] — a human still has to write the detector). "
         f"Audit trail -> {log}."
     )
