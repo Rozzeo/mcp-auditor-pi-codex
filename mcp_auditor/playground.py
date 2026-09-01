@@ -294,7 +294,17 @@ const WEIGHTS = { critical: 40, high: 20, medium: 10, low: 5, info: 0 };
 const ATTENTION = new Set(__ATTENTION__);
 const SEV_RANK = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
-function rx(p) { try { return new RegExp(p, "i"); } catch (e) { return null; } }
+// Python can scope case-sensitivity inside a pattern; JavaScript can only set
+// it per regex. TP-003 uses `(?-i:...)` to keep its SCREAMING_SNAKE alternative
+// case-sensitive, which threw here and was swallowed by the catch -- so the
+// page silently detected less than the engine it claims to mirror. A pattern
+// wholly wrapped in that group compiles without the `i` flag instead.
+function rx(p) {
+  try {
+    const scoped = /^\(\?-i:([\s\S]*)\)$/.exec(p);
+    return scoped ? new RegExp(scoped[1], "") : new RegExp(p, "i");
+  } catch (e) { return null; }
+}
 function firstMatch(patterns, text) {
   for (const p of patterns || []) {
     const r = rx(p); if (!r) continue;

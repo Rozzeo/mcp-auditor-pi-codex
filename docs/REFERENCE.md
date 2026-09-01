@@ -430,8 +430,10 @@ violations, and analysis coverage. See
 [`PRIVILEGE-POLICY.md`](PRIVILEGE-POLICY.md) for the complete model.
 
 JavaScript/TypeScript extraction recognizes current
-`registerTool(name, config, handler)`, legacy `server.tool(...)`, and low-level
-`setRequestHandler("tools/list", ...)` definitions. MCP annotations such as
+`registerTool(name, config, handler)`, every `server.tool(...)` overload, and
+the low-level `setRequestHandler("tools/list", ...)` /
+`setRequestHandler("tools/call", ...)` pair, whose dispatch is split per tool so
+body-level rules apply. MCP annotations such as
 `readOnlyHint` and `destructiveHint` are retained but treated as untrusted hints:
 the auditor compares them with capabilities observed in the handler and reports
 contradictions.
@@ -849,13 +851,29 @@ rules:
 ## Supported MCP server shapes
 
 - **Python:** MCP SDK usage (`from mcp...`, `FastMCP`, `@server.tool` /
-  `@mcp.tool` decorators). Parsed with the `ast` module.
+  `@mcp.tool` decorators, and the imperative `add_tool(fn)`), plus the
+  low-level `@server.list_tools()` / `@server.call_tool()` pair. Parsed with
+  the `ast` module. The SDK signal is looked for across the whole tree, not
+  per file, because in a server large enough to split its tools across modules
+  the import lives in the module that builds the server and the registrations
+  live elsewhere.
 - **TypeScript / JavaScript:** `@modelcontextprotocol/sdk` and current
-  `@modelcontextprotocol/server` imports; legacy `server.tool(...)`, current
-  `registerTool(name, config, handler)`, and low-level `tools/list` handlers.
+  `@modelcontextprotocol/server` imports; every `server.tool(...)` overload
+  (with or without a description literal, with or without an explicit generic
+  argument), `registerTool(name, config, handler)`, and the low-level
+  `tools/list` + `tools/call` pair — a `switch (name)` or `if (name === …)`
+  dispatch is split into branches so each tool carries its own implementation.
   Handler capabilities use a comment-aware structural scan; dynamic imports,
-  wrapper functions, and generated dispatch remain explicitly reported limits.
-- **Manifest:** any JSON listing tools with `name` + `description` + `inputSchema`.
+  wrapper functions, and computed dispatch remain explicitly reported limits.
+- **Manifest:** any JSON `{"tools": [...]}` document, or a bare array whose
+  entries carry `name` + a schema key. A tool list is `declared` evidence, not
+  `source`: it names the surface and contains no implementation.
+
+Anything the extractor sees but cannot resolve — a computed tool name, an
+imported handler, a dispatch it cannot read, a file it cannot parse — is
+recorded as a coverage gap, and any gap withholds the numeric score. A shape
+that is dropped silently would otherwise be reported as clean, which is the
+one failure a reviewer cannot recover from.
 
 ## Development
 

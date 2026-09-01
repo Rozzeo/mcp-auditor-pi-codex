@@ -79,6 +79,33 @@ def test_atlas_and_signatures_move_together():
     assert SIGNATURES["version"] == ATLAS["version"]
 
 
+# --- the playground mirrors these patterns in JavaScript -----------------
+
+
+def test_every_pattern_is_one_the_playground_can_compile():
+    """The page claims to run the shipped signature version. A pattern using a
+    Python-only construct throws in `new RegExp`, is swallowed by the catch in
+    `rx()`, and the page then silently detects less than the engine it mirrors.
+
+    `(?-i:...)` wrapping a whole pattern is the one exception: `rx()` strips it
+    and compiles without the `i` flag, which is what it means.
+    """
+    python_only = ("(?P<", "(?P=", "(?#", r"\Z", r"\A", "(?i)", "(?m)", "(?s)", "(?x)")
+    offenders = []
+    for rule_id, rule in RULES.items():
+        for key, value in rule.items():
+            if not (key == "patterns" or key.endswith("_patterns")) or not isinstance(value, list):
+                continue
+            for pattern in value:
+                body = pattern
+                if pattern.startswith("(?-i:") and pattern.endswith(")"):
+                    body = pattern[len("(?-i:"): -1]
+                if "(?-i:" in body or any(token in body for token in python_only):
+                    offenders.append((rule_id, pattern))
+
+    assert offenders == []
+
+
 # --- signature files are validated, not half-applied ---------------------
 
 
