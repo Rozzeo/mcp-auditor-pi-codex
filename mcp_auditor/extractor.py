@@ -416,6 +416,78 @@ _PY_TYPE_TO_JSON = {
 _PY_TOOL_HINT = re.compile(r"@[\w.]*\btool\b|\badd_tool\s*\(|\bcall_tool\b|\blist_tools\b")
 
 
+def _py_add_tool_registrations(
+    path: str,
+    tree: ast.AST,
+    lines: list[str],
+    already: list[Tool],
+    gaps: list[CoverageGap],
+) -> list[Tool]:
+    """Tools registered through `mcp.add_tool(fn)` rather than a decorator.
+
+    Resolves the first argument to a function defined in the same module. When
+    it cannot -- an imported handler, or a name computed inside a loop, which
+    is the usual reason to reach for this API -- it records a gap instead of
+    dropping the registration, so the score is withheld rather than reported
+    against a surface that was never read.
+    """
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    seen = {tool.name for tool in already}
+    found: list[Tool] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "add_tool"):
+            continue
+
+        target = node.args[0] if node.args else None
+        handler = functions.get(target.id) if isinstance(target, ast.Name) else None
+        override = next((kw.value for kw in node.keywords if kw.arg == "name"), None)
+
+        if handler is None:
+            gaps.append(CoverageGap(
+                construct="add_tool",
+                location=f"{path}:{node.lineno}",
+                reason="The registered handler is not a function defined in this file "
+                       "(imported or computed), so its implementation was not analyzed.",
+            ))
+            continue
+
+        if override is None:
+            name = handler.name
+        elif isinstance(override, ast.Constant) and isinstance(override.value, str):
+            name = override.value
+        else:
+            gaps.append(CoverageGap(
+                construct="add_tool",
+                location=f"{path}:{node.lineno}",
+                reason=f"{handler.name!r} is registered under a computed name, so the "
+                       f"tool surface this file exposes is not fully known.",
+            ))
+            continue
+
+        if name in seen:
+            continue
+        seen.add(name)
+        found.append(
+            Tool(
+                name=name,
+                description=(ast.get_docstring(handler) or "").strip(),
+                schema=_schema_from_signature(handler),
+                location=f"{path}:{handler.lineno}",
+                body=_source_segment(lines, handler),
+                registry=func.value.id if isinstance(func.value, ast.Name) else "",
+            )
+        )
+    return found
+
+
 def _py_repo_uses_mcp(files: dict[str, str]) -> bool:
     """Whether any Python file in the tree imports the MCP SDK."""
     return any(
@@ -480,6 +552,13 @@ def _extract_python(
                 registry=_tool_decorator_registry(node) or "",
             )
         )
+
+    # FastMCP's imperative API. `mcp.add_tool(fn)` registers exactly what the
+    # decorator does, and nothing recognized it -- so a server that registers
+    # its tools in a loop, which is the reason to use this API at all, reported
+    # zero tools and a perfect score.
+    tools.extend(_py_add_tool_registrations(path, tree, lines, tools, gaps))
+
     # Low-level SDK shape: tools are declared as Tool(...) descriptors returned
     # from an @server.list_tools() coroutine and dispatched by name inside
     # @server.call_tool(). Only the declarations are read here; the dispatch
@@ -985,8 +1064,14 @@ def _annotation_to_json_type(annotation):
 
 # Matches server.tool("name", "description", { schema }, handler) and the
 # registerTool("name", { description, inputSchema }, handler) shapes.
+# The description is optional and the generic argument list is skipped. The SDK
+# has six `tool()` overloads; requiring two adjacent string literals matched
+# only the three that carry a description, so `tool(name, schema, cb)` and
+# `tool(name, cb)` were dropped with no coverage gap recorded -- and
+# `tool<T>(...)` failed on the `<` before the paren.
 _TS_TOOL_STRING = re.compile(
-    r"""[A-Za-z_$][\w$]*\.tool\s*\(\s*["'`]([^"'`]+)["'`]\s*,\s*["'`]([^"'`]*)["'`]""",
+    r"""[A-Za-z_$][\w$]*\.tool\s*(?:<[^<>()]*>)?\s*\(\s*["'`]([^"'`]+)["'`]\s*,"""
+    r"""\s*(?:["'`]([^"'`]*)["'`])?""",
     re.DOTALL,
 )
 # Matches both `server.registerTool("name", ...)` and the variable-bound form
@@ -995,7 +1080,8 @@ _TS_TOOL_STRING = re.compile(
 # `server.experimental.tasks.registerToolTask(...)`. Group 1 is a literal name,
 # group 2 an identifier that still has to be resolved against the file.
 _TS_REGISTER = re.compile(
-    r"""[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\.registerTool(?:Task)?\s*\(\s*"""
+    r"""[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\.registerTool(?:Task)?"""
+    r"""\s*(?:<[^<>()]*>)?\s*\(\s*"""
     r"""(?:["'`]([^"'`]+)["'`]|([A-Za-z_$][\w$]*)\s*,)""",
     re.DOTALL,
 )
@@ -1020,7 +1106,8 @@ def _extract_typescript(path: str, text: str) -> tuple[bool, list[Tool], list[Co
         return False, [], []
 
     for m in _TS_TOOL_STRING.finditer(text):
-        name, desc = m.group(1), m.group(2)
+        # group(2) is None on the overloads that carry no description literal.
+        name, desc = m.group(1), m.group(2) or ""
         line = text.count("\n", 0, m.start()) + 1
         schema = _ts_schema_after(text, m.end())
         body = _ts_call_span(text, m.start())
@@ -1057,13 +1144,30 @@ def _extract_typescript(path: str, text: str) -> tuple[bool, list[Tool], list[Co
             )
         )
 
-    # Low-level SDK form: setRequestHandler("tools/list", () => ({tools: [...]})).
-    # The descriptors are extractable, but tools/call dispatch may be dynamic, so
-    # these tools intentionally carry no implementation body unless a dedicated
-    # handler can be associated in a future interprocedural pass.
+    # Low-level SDK form: setRequestHandler("tools/list", () => ({tools: [...]}))
+    # declares the surface; setRequestHandler("tools/call", ...) implements it.
+    # Both halves are needed -- descriptors alone give every tool an empty body,
+    # which silently switches off every rule that reads one.
+    low_level: list[Tool] = []
     for m in _TS_LOW_LEVEL_LIST.finditer(text):
         call = _ts_call_span(text, m.start())
-        tools.extend(_extract_low_level_tool_list(path, text, m.start(), call))
+        low_level.extend(_extract_low_level_tool_list(path, text, m.start(), call))
+
+    if low_level:
+        branches = _ts_dispatch_branches(text)
+        for tool in low_level:
+            tool.body = branches.get(tool.name, "")
+            if not tool.body:
+                # Say so rather than reporting a body-less tool as clean: the
+                # dispatch is computed, in another module, or in a shape this
+                # pass does not read.
+                gaps.append(CoverageGap(
+                    construct="tools/call dispatch",
+                    location=tool.location,
+                    reason=f"No tools/call branch could be associated with {tool.name!r}, "
+                           f"so its implementation was not analyzed.",
+                ))
+        tools.extend(low_level)
 
     if tools:
         sdk = True
@@ -1258,12 +1362,87 @@ def _extract_low_level_tool_list(path: str, full_text: str, call_start: int, cal
     return tools
 
 
+# The other half of the low-level shape: `setRequestHandler("tools/call", ...)`.
+# The descriptors say what exists; this says what it does.
+_TS_LOW_LEVEL_CALL = re.compile(
+    r"""setRequestHandler\s*\(\s*(?:["'`]tools/call["'`]|CallToolRequestSchema)""",
+    re.DOTALL,
+)
+_TS_SWITCH = re.compile(r"""\bswitch\s*\(""")
+_TS_CASE = re.compile(r"""\bcase\s+["'`]([^"'`]+)["'`]\s*:""")
+_TS_IF_NAME = re.compile(
+    r"""\b(?:else\s+)?if\s*\(\s*[\w.$\[\]"'`]*\bname\s*===?\s*["'`]([^"'`]+)["'`]\s*\)\s*\{""",
+)
+
+
+def _ts_dispatch_branches(text: str) -> dict[str, str]:
+    """Map each tool name to the tools/call branch that implements it.
+
+    The low-level SDK splits a server in two: `tools/list` returns descriptors,
+    `tools/call` holds every implementation behind one dispatch. Extracting only
+    the first half gave those tools an empty `body`, and ten body-reading rules
+    -- CI-001, SQ-001, DE-001, SL-001, AT-001, and the body halves of DB-001,
+    DB-002, DL-001, XC-001, TC-001 -- returned immediately on all of them. The
+    identical server written in Python was fully analyzed, because the Python
+    path already does this (`_py_dispatch_branches`); this is the port.
+
+    As there, the prologue -- whatever the handler runs before it branches --
+    is prepended to every branch, since it genuinely runs for every tool. What
+    is never shared is one branch's body with another branch's tool.
+    """
+    match = _TS_LOW_LEVEL_CALL.search(text)
+    if not match:
+        return {}
+    call = _ts_call_span(text, match.start())
+    if not call:
+        return {}
+
+    branches: dict[str, str] = {}
+    switch = _TS_SWITCH.search(call)
+    first_branch_at = len(call)
+
+    if switch:
+        brace = call.find("{", switch.end())
+        body = _balanced_delimited(call, brace, "{", "}") if brace != -1 else ""
+        if body:
+            cases = list(_TS_CASE.finditer(body))
+            for i, case in enumerate(cases):
+                end = cases[i + 1].start() if i + 1 < len(cases) else len(body)
+                branches[case.group(1)] = body[case.end():end].strip()
+            if cases:
+                first_branch_at = switch.start()
+
+    if not branches:
+        for m in _TS_IF_NAME.finditer(call):
+            body = _balanced_delimited(call, call.find("{", m.end() - 1), "{", "}")
+            if body:
+                branches[m.group(1)] = body[1:-1].strip()
+                first_branch_at = min(first_branch_at, m.start())
+
+    if not branches:
+        return {}
+
+    prologue = call[:first_branch_at]
+    # Drop the signature line so the prologue is statements, not `async (req) =>`.
+    opening = prologue.find("{")
+    prologue = prologue[opening + 1:].strip() if opening != -1 else ""
+    return {
+        name: f"{prologue}\n{body}" if prologue else body for name, body in branches.items()
+    }
+
+
 def _ts_schema_after(text: str, pos: int) -> dict:
     """Best-effort: capture parameter names from the schema object literal that
     follows a tool registration, e.g. `{ dir: z.string() }` -> properties.dir."""
     rest = text[pos:]
     brace = rest.find("{")
     if brace == -1 or brace > 200:
+        return {}
+    # The schema has to be the very next argument. Without this, a registration
+    # with no schema -- `tool("name", async (args) => { ... })` -- had the
+    # handler's own body read as a schema object, inventing parameters out of
+    # its local variables.
+    if rest[:brace].strip().strip(",") != "":
         return {}
     # Find the matching closing brace.
     depth = 0
@@ -1288,6 +1467,24 @@ def _ts_schema_after(text: str, pos: int) -> dict:
 # --- JSON manifest ---------------------------------------------------------
 
 
+def _looks_like_tool_descriptors(entries: list) -> bool:
+    """Whether a bare JSON array is a tool list rather than any other array.
+
+    The Python, TypeScript and PHP paths all require an SDK signal before they
+    read a call shape as an MCP definition. The bare-array form required only
+    "a list of objects with a `name`" -- which is also every eslint config,
+    every rule set and every seed fixture, each of which then appeared as a
+    tool in the inventory and the approval matrix. A schema key is what a tool
+    descriptor has and those do not.
+    """
+    return any(
+        isinstance(entry, dict)
+        and entry.get("name")
+        and any(key in entry for key in ("inputSchema", "input_schema", "schema"))
+        for entry in entries
+    )
+
+
 def _extract_manifest(path: str, text: str) -> list[Tool]:
     try:
         data = json.loads(text)
@@ -1295,8 +1492,9 @@ def _extract_manifest(path: str, text: str) -> list[Tool]:
         return []
     raw_tools = None
     if isinstance(data, dict) and isinstance(data.get("tools"), list):
+        # A `{"tools": [...]}` document is the tools/list response shape itself.
         raw_tools = data["tools"]
-    elif isinstance(data, list):
+    elif isinstance(data, list) and _looks_like_tool_descriptors(data):
         raw_tools = data
     if not raw_tools:
         return []

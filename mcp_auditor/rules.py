@@ -20,7 +20,7 @@ from yaml.resolver import BaseResolver
 
 from .capabilities import DESTRUCTIVE_CAPABILITIES, MUTATING_CAPABILITIES
 from .source_roles import deployed_files
-from .types import Finding, Tool
+from .types import SEVERITY_ORDER, Finding, Tool
 
 _DEFAULT_SIGNATURES = Path(__file__).with_name("signatures.yaml")
 
@@ -60,8 +60,21 @@ _SECRET_RE = re.compile(
 )
 
 
+# Rules `run_rules` indexes directly rather than behind an `in rules` guard.
+# They are the original core of the engine and every caller assumes they ran;
+# a file missing one used to surface as a bare `KeyError: 'TP-001'` from deep
+# inside the run, naming a rule id and nothing else.
+_REQUIRED_RULES = ("TP-001", "TP-002", "TP-003", "TP-004", "OP-001", "OP-002", "ME-001")
+
+
 def load_signatures(path: str | Path | None = None) -> dict[str, Any]:
-    """Load the signature set from YAML (defaults to the bundled file)."""
+    """Load the signature set from YAML (defaults to the bundled file).
+
+    Validates here rather than at match time. A signature file is user-supplied
+    input -- `--signatures` exists so a reviewer can pin or fork one -- and the
+    failures it produces are worth naming: a missing core rule, or a severity
+    the scorer does not weigh.
+    """
     target = Path(path) if path else _DEFAULT_SIGNATURES
     try:
         with open(target, "r", encoding="utf-8") as fh:
@@ -70,6 +83,29 @@ def load_signatures(path: str | Path | None = None) -> dict[str, Any]:
         raise ValueError(f"Invalid signature file: {target}: {exc}") from exc
     if not isinstance(data, dict) or "rules" not in data:
         raise ValueError(f"Invalid signature file: {target}")
+
+    rules = data["rules"]
+    if not isinstance(rules, dict):
+        raise ValueError(f"Invalid signature file: {target}: 'rules' must be a mapping")
+
+    missing = [rule_id for rule_id in _REQUIRED_RULES if rule_id not in rules]
+    if missing:
+        raise ValueError(
+            f"Invalid signature file: {target}: missing required rule(s) "
+            f"{', '.join(missing)}. These run unconditionally; a set without "
+            f"them would silently detect less than it appears to."
+        )
+
+    # An unrecognized severity weighs 0 in the scorer and is absent from the
+    # summary, so a typo'd one produced findings that were invisible to both
+    # while still appearing in the list. Fail on it instead.
+    for rule_id, rule in rules.items():
+        severity = rule.get("severity") if isinstance(rule, dict) else None
+        if severity is not None and severity not in SEVERITY_ORDER:
+            raise ValueError(
+                f"Invalid signature file: {target}: rule {rule_id} has severity "
+                f"{severity!r}; expected one of {', '.join(SEVERITY_ORDER)}"
+            )
     return data
 
 
