@@ -225,6 +225,37 @@ def _first_match(patterns: Iterable[str], text: str) -> str | None:
     return None
 
 
+# A negator, followed by anything that is not a clause boundary, ending exactly
+# where the match begins. Bounded lookback rather than whole-sentence: a
+# disclaimer in one clause must not excuse a capability described in the next.
+_NEGATED_BY = re.compile(
+    r"\b(?:never|not|n't|cannot|nor|without|no)\b[^.;:!?]{0,48}\Z",
+    re.IGNORECASE,
+)
+
+
+def _first_affirmative_match(patterns: Iterable[str], text: str) -> str | None:
+    """The first match a negator does not govern.
+
+    The name-versus-description rules ask "does this description claim an
+    action the name hides?" -- a question that inverts under negation.
+    "Read-only: this tool never creates, updates or deletes anything" contains
+    the word `deletes`, and matching it reported an honest read-only tool as a
+    disguised destructive one, at critical. The clearer the docstring, the
+    worse the score; a rule that punishes careful documentation gets the
+    documentation removed, not improved.
+    """
+    # Collapsed first: a docstring wraps mid-sentence, and a line break is not
+    # a clause boundary. Without this, "never\ncreates, updates or deletes"
+    # read as two clauses and the disclaimer stopped governing the verbs.
+    flat = re.sub(r"\s+", " ", text)
+    for pat in patterns:
+        for m in re.finditer(pat, flat, re.IGNORECASE):
+            if not _NEGATED_BY.search(flat[: m.start()]):
+                return m.group(0)
+    return None
+
+
 @lru_cache(maxsize=64)
 def _combined(patterns: tuple[str, ...]) -> re.Pattern:
     """One precompiled alternation for file-level rules — those scan every byte
@@ -275,7 +306,7 @@ def _tp004(tool: Tool, rule: dict) -> list[Finding]:
     benign = set(rule.get("benign_name_hints", []))
     if not (tokens & benign):
         return []
-    hit = _first_match(rule.get("disguised_action_patterns", []), tool.description)
+    hit = _first_affirmative_match(rule.get("disguised_action_patterns", []), tool.description)
     if not hit:
         return []
     return [_make(rule, "TP-004", tool, f"name '{tool.name}' but description: {hit}")]
@@ -286,7 +317,7 @@ def _op001(tool: Tool, rule: dict) -> list[Finding]:
     read_hints = set(rule.get("read_name_hints", []))
     if not (tokens & read_hints):
         return []
-    hit = _first_match(rule.get("write_action_patterns", []), tool.description)
+    hit = _first_affirmative_match(rule.get("write_action_patterns", []), tool.description)
     if not hit:
         return []
     return [_make(rule, "OP-001", tool, f"read-style name '{tool.name}' but description: {hit}")]

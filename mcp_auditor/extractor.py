@@ -84,6 +84,16 @@ def extract(files: dict[str, str]) -> ExtractionResult:
     php_mcp_repo = _php_repo_uses_mcp(files)
     sdk_detected = sdk_detected or php_mcp_repo
 
+    # The MCP import lives in the module that builds the server; in any project
+    # large enough to split its tools across modules, the files that actually
+    # carry `@mcp.tool()` import the server object instead. Deciding the gate
+    # per file therefore discarded every tool in exactly the servers most worth
+    # reviewing -- silently, since a dropped file leaves no gap behind. The
+    # question "is this repository an MCP server" is a property of the tree, so
+    # it is answered once, over the tree.
+    py_mcp_repo = _py_repo_uses_mcp(files)
+    sdk_detected = sdk_detected or py_mcp_repo
+
     # Tools registered inside tests and fixtures exercise the SDK; they are not
     # part of the surface a reviewer approves. Counting them adds phantom rows
     # to the capability matrix and phantom gaps to the coverage report.
@@ -91,7 +101,7 @@ def extract(files: dict[str, str]) -> ExtractionResult:
         lower = path.lower()
         try:
             if lower.endswith(_PY_EXT):
-                seen_sdk, found, found_gaps = _extract_python(path, text)
+                seen_sdk, found, found_gaps = _extract_python(path, text, repository_mcp=py_mcp_repo)
                 sdk_detected = sdk_detected or seen_sdk
                 tools.extend(found)
                 gaps.extend(found_gaps)
@@ -106,8 +116,16 @@ def extract(files: dict[str, str]) -> ExtractionResult:
                 gaps.extend(found_gaps)
             elif lower.endswith(_JSON_EXT):
                 tools.extend(_extract_manifest(path, text))
-        except Exception:
-            # Never let a single malformed file abort the whole audit.
+        except Exception as exc:
+            # Never let a single malformed file abort the whole audit -- but a
+            # file we could not read is a file we did not audit, and saying
+            # nothing about it lets an unreadable tree report a perfect score.
+            gaps.append(CoverageGap(
+                construct="file",
+                location=path,
+                reason=f"could not be analyzed ({type(exc).__name__}: {exc}); "
+                       f"any tool definitions it contains were not reviewed",
+            ))
             continue
 
     # A FastMCP server can mount sub-servers under a namespace, and the name a
@@ -393,25 +411,50 @@ _PY_TYPE_TO_JSON = {
 }
 
 
-def _extract_python(path: str, text: str) -> tuple[bool, list[Tool], list[CoverageGap]]:
+# A registration this file might carry. Cheap enough to run over every Python
+# file, and the only thing that earns a file the cost of `ast.parse`.
+_PY_TOOL_HINT = re.compile(r"@[\w.]*\btool\b|\badd_tool\s*\(|\bcall_tool\b|\blist_tools\b")
+
+
+def _py_repo_uses_mcp(files: dict[str, str]) -> bool:
+    """Whether any Python file in the tree imports the MCP SDK."""
+    return any(
+        path.lower().endswith(_PY_EXT)
+        and (_PY_MCP_IMPORT.search(text) or _PY_FASTMCP.search(text))
+        for path, text in files.items()
+    )
+
+
+def _extract_python(
+    path: str, text: str, repository_mcp: bool = False
+) -> tuple[bool, list[Tool], list[CoverageGap]]:
     sdk = bool(_PY_MCP_IMPORT.search(text) or _PY_FASTMCP.search(text))
     tools: list[Tool] = []
 
-    # `@app.tool` is used by unrelated frameworks too. Without an MCP import or
-    # FastMCP symbol, treating every such decorator as MCP creates high-noise
-    # false positives in ordinary Python applications.
+    # `@app.tool` is used by unrelated frameworks too. Without an MCP signal
+    # somewhere in the tree, treating every such decorator as MCP creates
+    # high-noise false positives in ordinary Python applications.
     #
     # This gate runs BEFORE ast.parse on purpose: parsing is the single most
-    # expensive step of an audit, and in a repo where one file is the MCP server
-    # every other Python file would otherwise be parsed only for the result to be
-    # discarded here. The regex above already decided the answer.
-    if not sdk:
+    # expensive step of an audit, and a repo where one file is the MCP server
+    # should not pay to parse files that register nothing. So a file earns
+    # parsing by carrying the SDK itself, or by carrying a registration in a
+    # tree that does.
+    if not sdk and not (repository_mcp and _PY_TOOL_HINT.search(text)):
         return False, [], []
 
     gaps: list[CoverageGap] = []
     try:
         tree = ast.parse(text)
-    except SyntaxError:
+    except SyntaxError as exc:
+        # Silently discarding an unparseable file is how an auditor running on
+        # 3.10 reports a clean bill of health for a server written for 3.12.
+        gaps.append(CoverageGap(
+            construct="python file",
+            location=f"{path}:{exc.lineno or 1}",
+            reason=f"could not be parsed ({exc.msg}); any tool definitions it "
+                   f"contains were not reviewed",
+        ))
         return sdk, tools, gaps
 
     lines = _source_lines(text)
@@ -892,11 +935,27 @@ def _annotation_mapping(value: ast.AST) -> dict:
 
 
 def _schema_from_signature(node: ast.AST) -> dict:
+    """The JSON Schema a handler's signature implies.
+
+    Positional-only and keyword-only parameters count. Reading `args.args`
+    alone did not merely miss them -- it emitted `properties: {}`, an
+    affirmative claim that the tool takes no arguments, which switched off
+    every schema-driven rule (OP-002, DB-001, AT-001) for any handler that
+    used `*,`.
+    """
     props: dict[str, dict] = {}
     required: list[str] = []
     args = node.args
-    defaulted = {a.arg for a in args.args[len(args.args) - len(args.defaults):]} if args.defaults else set()
-    for arg in args.args:
+    positional = [*args.posonlyargs, *args.args]
+    defaulted = (
+        {a.arg for a in positional[len(positional) - len(args.defaults):]}
+        if args.defaults
+        else set()
+    )
+    defaulted |= {
+        a.arg for a, default in zip(args.kwonlyargs, args.kw_defaults) if default is not None
+    }
+    for arg in [*positional, *args.kwonlyargs]:
         if arg.arg in ("self", "cls", "ctx", "context"):
             continue
         json_type = _annotation_to_json_type(arg.annotation)
