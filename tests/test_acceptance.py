@@ -56,7 +56,7 @@ def test_ac4_non_mcp_repo_graceful_no_score():
 def test_ac5_no_target_code_is_ever_executed():
     """Guard against regressions: the codebase must never import/exec/eval/run
     target content. We assert the source contains no such calls on target data."""
-    src_dir = Path(__file__).parent.parent / "src" / "mcp_auditor"
+    src_dir = Path(__file__).parent.parent / "mcp_auditor"
     forbidden = {"eval", "exec", "compile"}
     forbidden_import = {"importlib", "runpy"}
     for py in src_dir.rglob("*.py"):

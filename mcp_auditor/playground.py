@@ -9,6 +9,12 @@ The patterns are embedded verbatim from signatures.yaml, so the playground
 always matches the shipped signature version. The Python engine remains the
 source of truth: server-level rules (NC/TS/TC/RP/OP-003/ME) need the whole
 target and only run in a real `mcp-audit` audit — the page says so.
+
+The chrome is the same Retro-Futurist Editorial system as the report and the
+encyclopedia, assembled by string substitution: `__FONTS__` and `__THEME__` come
+from `_theme` so this page cannot drift from the other two, and `__ATTENTION__`
+hands the severity policy to the inline engine rather than letting it keep a
+second copy.
 """
 
 from __future__ import annotations
@@ -16,7 +22,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ._theme import ATTENTION_SEVERITIES, SEVERITY_CSS, THEME_TOKENS_CSS
+from ._theme import ATTENTION_SEVERITIES, FONTS_LINK, PAGE_CSS
 
 # Per-tool rules the JS engine mirrors, with the signature keys each one needs.
 _EMBED_KEYS = {
@@ -127,7 +133,8 @@ def build_playground(signatures: dict[str, Any]) -> str:
     data = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     return (
         _TEMPLATE
-        .replace("__THEME__", THEME_TOKENS_CSS + SEVERITY_CSS)
+        .replace("__FONTS__", FONTS_LINK)
+        .replace("__THEME__", PAGE_CSS)
         .replace("__ATTENTION__", json.dumps(ATTENTION_SEVERITIES))
         .replace("__DATA__", data)
     )
@@ -139,68 +146,114 @@ _TEMPLATE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MCP Security Playground</title>
+__FONTS__
 <style>
 __THEME__
-* { box-sizing: border-box; margin: 0; }
-body { font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
-  background: var(--plane); color: var(--ink); padding: 28px 20px 64px; }
-.wrap { max-width: 1100px; margin: 0 auto; }
-h1 { font-size: 20px; margin-bottom: 4px; }
-.sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
-.cols { display: grid; grid-template-columns: minmax(320px, 460px) 1fr; gap: 16px; align-items: start; }
+/* Page-specific layout. Everything above arrives from `_theme`. */
+.masthead { padding: 56px 0 8px; }
+.masthead h1 { margin-bottom: 6px; }
+.lede { max-width: 720px; margin-top: 12px; }
+.meta { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+
+.cols { display: grid; grid-template-columns: minmax(320px, 470px) 1fr; gap: 30px; align-items: start; margin-top: 44px; }
 @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
-.card h2 { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--muted); margin-bottom: 12px; }
-label { display: block; font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 12px 0 4px; }
-input[type=text], textarea, select {
-  width: 100%; border: 1px solid var(--border); border-radius: 8px; background: var(--plane);
-  color: var(--ink); padding: 8px 10px; font-size: 13px;
+.panel { padding: 26px 24px 24px; }
+.panel.input { box-shadow: 6px 6px 0 var(--diva); }
+.panel.output { box-shadow: 6px 6px 0 var(--orange); }
+.panel:hover { transform: none; box-shadow: 6px 6px 0 var(--diva); }
+.panel.output:hover { box-shadow: 6px 6px 0 var(--orange); }
+
+label {
+  display: block; font-family: var(--headline); font-size: 12px; letter-spacing: 3px;
+  text-transform: uppercase; color: var(--ink); margin: 18px 0 6px;
 }
-textarea { font-family: ui-monospace, monospace; resize: vertical; }
-select { margin-bottom: 4px; }
-.scorebox { display: flex; align-items: center; gap: 18px; margin-bottom: 14px; }
-.hero { font-size: 52px; font-weight: 700; line-height: 1; }
-.hero small { font-size: 18px; font-weight: 500; color: var(--muted); }
-.meter { flex: 1; height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; }
-.meter > i { display: block; height: 100%; border-radius: 4px; transition: width .25s, background .25s; }
-.verdict { font-size: 13px; color: var(--ink-2); margin-bottom: 14px; }
-.findings { display: grid; gap: 10px; }
-.finding { border: 1px solid var(--border); border-left: 4px solid var(--grid);
-  border-radius: 10px; padding: 12px 14px; background: var(--surface); }
-.finding.attention { border-left-color: var(--accent); }
-.top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
-.rule-id { font-family: ui-monospace, monospace; font-size: 13px; font-weight: 600; }
-.badge { font-size: 11px; border: 1px solid var(--border); border-radius: 99px; padding: 1px 8px; color: var(--ink-2); }
-.msg { font-size: 14px; margin-bottom: 6px; }
-.evidence { font-family: ui-monospace, monospace; font-size: 12px; background: var(--code-bg);
-  border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; white-space: pre-wrap; color: var(--ink-2); }
-.fix { font-size: 12.5px; color: var(--ink-2); }
-.fix b { color: var(--ink); }
-.clean { text-align: center; padding: 36px 16px; color: var(--ink); font-weight: 600;
-  border: 1px dashed var(--border); border-radius: 10px; }
-.recs { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 14px; }
-.recs h2 { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--muted); margin-bottom: 10px; }
-.recs ol { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
-.recs li { font-size: 13px; color: var(--ink-2); }
-.recs li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
-.recs .who { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
-  margin-right: 6px; color: var(--ink-2); }
-.recs .who.attention { color: var(--accent); }
-.note { font-size: 12px; color: var(--muted); margin-top: 14px; }
-.err { color: var(--accent); font-size: 12px; margin-top: 4px; min-height: 16px; }
-footer { margin-top: 28px; font-size: 12px; color: var(--muted); }
+input[type=text], textarea, select {
+  width: 100%; border: 3px solid var(--ink); border-radius: 0; background: var(--cream);
+  color: var(--ink); padding: 9px 11px; font: 13px/1.5 var(--mono);
+}
+input[type=text]:focus, textarea:focus, select:focus {
+  outline: 0; box-shadow: 4px 4px 0 var(--amber);
+}
+textarea { resize: vertical; }
+select { font-family: var(--mono); }
+
+/* Score readout — the hero number, the meter, then the verdict sentence. */
+.scorebox { display: flex; align-items: center; gap: 20px; margin-bottom: 14px; }
+.hero { font-family: var(--display); font-size: 52px; line-height: 1; color: var(--ink); }
+.hero small { font-family: var(--headline); font-size: 16px; letter-spacing: 2px; }
+.meter { flex: 1; height: 14px; border: 3px solid var(--ink); background: var(--cream-deep); }
+.meter > i { display: block; height: 100%; transition: width .25s, background .25s; }
+.verdict { font-family: var(--headline); font-size: 17px; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--ink); margin-bottom: 20px; }
+
+/* Findings, rendered by the engine below. */
+.findings { display: grid; gap: 22px; }
+.finding {
+  position: relative; background: var(--paper); border: 3px solid var(--ink);
+  box-shadow: 5px 5px 0 var(--mondo); padding: 18px 18px 16px;
+}
+.finding.attention { box-shadow: 5px 5px 0 var(--red); }
+.top { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.rule-id { font-family: var(--mono); font-weight: 700; font-size: 13px; color: var(--ink); }
+.badge {
+  font-family: var(--headline); font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+  border: 2px solid var(--ink-soft); background: var(--cream); color: var(--ink-soft); padding: 1px 8px;
+}
+.msg { font-family: var(--headline); font-size: 17px; line-height: 1.25; color: var(--ink); margin-bottom: 14px; }
+/* The engine writes plain `<div class="evidence">`, so the label is a ::before
+   rather than a data-tag — same ink block as the report's evidence prompt. */
+.evidence {
+  position: relative; background: var(--ink); color: var(--cream);
+  border-left: 6px solid var(--orange); box-shadow: 4px 4px 0 var(--orange);
+  padding: 16px 16px 14px 18px; margin: 20px 0 14px;
+  /* No `overflow-x`: it would clip the ::before tag hanging above the block.
+     See the same note on `.prompt` in _theme.py. */
+  font: 12.5px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+}
+.evidence::before {
+  content: 'Evidence'; position: absolute; top: -13px; left: 16px;
+  background: var(--ink); color: var(--amber); padding: 3px 12px;
+  font-family: var(--display); font-size: 11px; letter-spacing: 3px;
+}
+.fix {
+  background: var(--paper); border: 3px solid var(--ink);
+  border-left: 6px solid var(--multipass-green); box-shadow: 4px 4px 0 var(--multipass-green);
+  padding: 10px 14px; font-size: 12.5px;
+}
+.fix b { font-family: var(--display); font-size: 11px; letter-spacing: 3px; color: var(--ink); margin-right: 6px; }
+.clean {
+  text-align: center; padding: 40px 20px; background: var(--paper);
+  border: 3px dashed var(--ink); color: var(--ink);
+}
+
+.recs { margin-top: 26px; border-top: 3px dashed var(--mondo); padding-top: 18px; }
+.recs h2 { font-size: 15px; letter-spacing: 2px; margin-bottom: 12px; }
+.recs ol { margin: 0; padding-left: 20px; display: grid; gap: 10px; }
+.recs li { font-size: 13px; }
+.recs li::marker { font-family: var(--display); font-size: 11px; color: var(--orange); }
+.recs .who {
+  font-family: var(--display); font-size: 10px; letter-spacing: 2px; margin-right: 8px;
+  border: 2px solid var(--ink); background: var(--cream-deep); color: var(--ink); padding: 2px 7px;
+}
+.recs .who.attention { border-color: var(--red); color: var(--red); background: var(--paper); }
+.note { font-size: 12px; color: var(--ink-soft); margin-top: 18px; }
+.err { font-family: var(--headline); font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--red); margin-top: 6px; min-height: 18px; }
 </style>
 </head>
 <body>
+<div class="grain" aria-hidden="true"></div>
+<div class="stripes" aria-hidden="true"></div>
 <div class="wrap">
-<h1>MCP Security Playground</h1>
-<p class="sub">Paste an MCP tool definition and watch the auditor's per-tool rules fire live.
-Nothing leaves this page — everything runs locally in your browser.</p>
+<header class="masthead">
+  <h1>MCP Security<br>Playground</h1>
+  <p class="subtitle">Paste a tool · watch the rules fire</p>
+  <p class="lede">Paste an MCP tool definition and watch the auditor's per-tool rules fire live.
+  Nothing leaves this page — everything runs locally in your browser.</p>
+</header>
 <div class="cols">
-  <div class="card">
-    <h2>Tool under test</h2>
+  <div class="block labelled panel input" data-label="Input">
+    <h3>Tool under test</h3>
     <label for="preset">Preset examples</label>
     <select id="preset"></select>
     <label for="name">Tool name</label>
@@ -215,8 +268,8 @@ Nothing leaves this page — everything runs locally in your browser.</p>
     <p class="note">Server-level rules (name collisions, typosquatting, read+send chaining,
     lockfiles, network binds) need the whole repository — run <code>mcp-audit &lt;target&gt;</code> for the full audit.</p>
   </div>
-  <div class="card">
-    <h2>Live audit</h2>
+  <div class="block labelled panel output" data-label="Live audit">
+    <h3>Live audit</h3>
     <div class="scorebox">
       <div class="hero" id="score">100<small>/100</small></div>
       <div class="meter"><i id="meter"></i></div>
@@ -226,7 +279,13 @@ Nothing leaves this page — everything runs locally in your browser.</p>
     <div id="recs"></div>
   </div>
 </div>
-<footer id="foot"></footer>
+<footer class="stamped">
+  <div>
+    <h2>Local only</h2>
+    <p class="meta" id="foot"></p>
+  </div>
+  <div class="stamp">Nothing leaves this page</div>
+</footer>
 </div>
 <script>
 const DATA = __DATA__;
@@ -235,7 +294,17 @@ const WEIGHTS = { critical: 40, high: 20, medium: 10, low: 5, info: 0 };
 const ATTENTION = new Set(__ATTENTION__);
 const SEV_RANK = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
-function rx(p) { try { return new RegExp(p, "i"); } catch (e) { return null; } }
+// Python can scope case-sensitivity inside a pattern; JavaScript can only set
+// it per regex. TP-003 uses `(?-i:...)` to keep its SCREAMING_SNAKE alternative
+// case-sensitive, which threw here and was swallowed by the catch -- so the
+// page silently detected less than the engine it claims to mirror. A pattern
+// wholly wrapped in that group compiles without the `i` flag instead.
+function rx(p) {
+  try {
+    const scoped = /^\(\?-i:([\s\S]*)\)$/.exec(p);
+    return scoped ? new RegExp(scoped[1], "") : new RegExp(p, "i");
+  } catch (e) { return null; }
+}
 function firstMatch(patterns, text) {
   for (const p of patterns || []) {
     const r = rx(p); if (!r) continue;
@@ -369,7 +438,7 @@ function render() {
   let score = 100;
   findings.forEach(f => { score -= WEIGHTS[f.severity] || 0; });
   score = Math.max(0, score);
-  const color = score >= 80 ? "var(--ink)" : "var(--accent)";
+  const color = score >= 80 ? "var(--ink)" : "var(--red)";
   $("score").innerHTML = score + "<small>/100</small>";
   $("score").style.color = color;
   const meter = $("meter"); meter.style.width = score + "%"; meter.style.background = color;

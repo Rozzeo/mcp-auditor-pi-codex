@@ -994,7 +994,7 @@ def intel_curate(queue_path: str | None, atlas_path: str | None, limit: int | No
 
     if drafts:
         n = merge_into_atlas(drafts, atlas_path=atlas_path)
-        console.print(f"[green]{n} entrie(s) merged[/green] into {atlas_path or 'src/mcp_auditor/threats.yaml'}.")
+        console.print(f"[green]{n} entrie(s) merged[/green] into {atlas_path or 'mcp_auditor/threats.yaml'}.")
     else:
         console.print("[dim]Nothing merged.[/dim]")
     console.print(f"[dim]{len(remaining)} candidate(s) left in the queue.[/dim]")
@@ -1104,7 +1104,7 @@ def intel_autodraft(
 
     n = merge_into_atlas(result.included, atlas_path=atlas_path)
     err.print(
-        f"[green]{n} entrie(s) merged[/green] -> {atlas_path or 'src/mcp_auditor/threats.yaml'} "
+        f"[green]{n} entrie(s) merged[/green] -> {atlas_path or 'mcp_auditor/threats.yaml'} "
         f"(needs_review: true, rules: [] — a human still has to write the detector). "
         f"Audit trail -> {log}."
     )
@@ -1126,6 +1126,173 @@ def intel_build_docs(out_path: str, atlas_path: str | None) -> None:
         raise SystemExit(2)
     Path(out_path).write_text(build_encyclopedia(atlas), encoding="utf-8")
     err.print(f"[green]Wrote[/green] {out_path} ({len(atlas.get('threats', []))} threats).")
+    raise SystemExit(0)
+
+
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+#
+# Every install failure this project has actually produced looks the same from
+# the outside -- "the command does not work" -- while having three unrelated
+# causes: the executable is not on PATH, an older install is earlier on PATH, or
+# pip installed into one interpreter and the user is running another. None of
+# them are visible from an error message, and all three are visible in ten lines
+# of introspection. So: ask the machine instead of guessing.
+
+
+def _all_on_path(name: str) -> list[str]:
+    """Every executable called `name` on PATH, in resolution order.
+
+    `shutil.which` returns only the winner, which is exactly the information
+    that hides a shadowing problem.
+    """
+    import os as _os
+
+    exts = [""]
+    if _os.name == "nt":
+        exts = [""] + [e.lower() for e in _os.environ.get("PATHEXT", ".EXE").split(_os.pathsep)]
+    found: list[str] = []
+    for directory in _os.environ.get("PATH", "").split(_os.pathsep):
+        if not directory:
+            continue
+        for ext in exts:
+            candidate = Path(directory) / (name + ext)
+            try:
+                if candidate.is_file() and str(candidate) not in found:
+                    found.append(str(candidate))
+            except OSError:
+                continue
+    return found
+
+
+def _dist_version(dist: str) -> str | None:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version(dist)
+    except PackageNotFoundError:
+        return None
+
+
+def _collect_diagnostics() -> dict:
+    import platform
+
+    from . import __version__
+    from .updater import cache_dir, cached_atlas_path, cached_signatures_path
+
+    checks: list[dict] = []
+
+    def add(name: str, ok: bool | None, detail: str) -> None:
+        checks.append({"check": name, "ok": ok, "detail": detail})
+
+    add(
+        "python",
+        sys.version_info >= (3, 10),
+        f"{platform.python_version()} at {sys.executable}",
+    )
+
+    pkg_dir = Path(__file__).resolve().parent
+    installed = _dist_version("mcp-auditor-static")
+    if installed is None:
+        add("package", None, f"running from a checkout at {pkg_dir} (not pip-installed)")
+    else:
+        add("package", installed == __version__, f"mcp-auditor-static {installed} at {pkg_dir}")
+
+    legacy = _dist_version("mcp-auditor")
+    if legacy is not None:
+        add(
+            "stale install",
+            False,
+            f"the retired `mcp-auditor` {legacy} distribution is still installed and can "
+            f"shadow this one -- remove it with `pip uninstall mcp-auditor`",
+        )
+
+    executables = _all_on_path("mcp-audit")
+    if not executables:
+        add("mcp-audit on PATH", None, "not on PATH -- use `python -m mcp_auditor` instead")
+    elif len(executables) == 1:
+        add("mcp-audit on PATH", True, executables[0])
+    else:
+        add(
+            "mcp-audit on PATH",
+            False,
+            f"{len(executables)} copies; `{executables[0]}` wins. Others: "
+            + ", ".join(executables[1:]),
+        )
+
+    for module, dist, required in (
+        ("click", "click", True),
+        ("rich", "rich", True),
+        ("yaml", "PyYAML", True),
+        ("requests", "requests", True),
+        ("mcp", "mcp", False),
+        ("openpyxl", "openpyxl", False),
+    ):
+        found = _dist_version(dist)
+        if found:
+            add(f"dep: {dist}", True, found)
+        elif required:
+            add(f"dep: {dist}", False, "MISSING -- reinstall the package")
+        else:
+            add(f"dep: {dist}", None, f"not installed (optional: {module})")
+
+    try:
+        from .atlas import load_atlas
+
+        atlas = load_atlas()
+        add("threat atlas", True, f"v{atlas.get('version')} - {len(atlas.get('threats', []))} threats")
+    except Exception as exc:  # noqa: BLE001 - a broken atlas must not hide the rest
+        add("threat atlas", False, f"failed to load: {exc}")
+
+    try:
+        import yaml as _yaml
+
+        sig = _yaml.safe_load((pkg_dir / "signatures.yaml").read_text(encoding="utf-8"))
+        add("signatures", True, f"v{sig.get('version')} - {len(sig.get('rules', {}))} rules")
+    except Exception as exc:  # noqa: BLE001
+        add("signatures", False, f"failed to load: {exc}")
+
+    override = cached_signatures_path() or cached_atlas_path()
+    if override:
+        add("definition cache", None, f"downloaded definitions in use from {cache_dir()}")
+    else:
+        add("definition cache", None, f"empty ({cache_dir()}) -- bundled definitions in use")
+
+    return {"version": __version__, "checks": checks}
+
+
+@main.command(
+    name="doctor",
+    help="Diagnose this installation: interpreter, PATH, dependencies, definitions.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the diagnosis as JSON on stdout.")
+def doctor(as_json: bool) -> None:
+    report = _collect_diagnostics()
+    failures = [c for c in report["checks"] if c["ok"] is False]
+
+    if as_json:
+        report["ok"] = not failures
+        click.echo(json.dumps(report, indent=2))
+        raise SystemExit(1 if failures else 0)
+
+    console = Console()
+    table = Table(title=f"mcp-audit doctor - v{report['version']}", show_lines=False)
+    table.add_column("", width=2)
+    table.add_column("check", style="bold")
+    table.add_column("detail", overflow="fold")
+    for check in report["checks"]:
+        glyph = {True: "[green]OK[/green]", False: "[red]XX[/red]"}.get(check["ok"], "[yellow]--[/yellow]")
+        table.add_row(glyph, check["check"], check["detail"])
+    console.print(table)
+
+    if failures:
+        console.print(
+            f"[red]{len(failures)} problem(s).[/red] See the Troubleshooting section "
+            "of the README; `python -m mcp_auditor` always works regardless of PATH."
+        )
+        raise SystemExit(1)
+    console.print("[green]Everything checks out.[/green]")
     raise SystemExit(0)
 
 

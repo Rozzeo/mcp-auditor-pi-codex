@@ -62,7 +62,13 @@ def load_local(path: str) -> dict[str, str]:
             total += size
             if total > MAX_TOTAL_BYTES or len(files) >= MAX_FILES:
                 return files
-            files[str(fpath.relative_to(root))] = text
+            # Forward slashes, on every platform. These keys become the
+            # `location` printed in findings and stored in a JSON baseline, and
+            # `mcp-audit diff` compares baselines across machines -- so a
+            # Windows report full of `tools\files.py` did not line up with the
+            # Linux one it was being compared against. `inventory_local` and
+            # `skill_analysis` already normalized; this path did not.
+            files[str(fpath.relative_to(root)).replace("\\", "/")] = text
     return files
 
 

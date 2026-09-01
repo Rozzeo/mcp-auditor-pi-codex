@@ -107,12 +107,21 @@ def _detect_auth_signal(files: dict[str, str]) -> bool:
     return False
 
 
-# Files that can carry an implementation. Prose about a server is not one.
+# Files that can carry an implementation. Prose about a server is not one, and
+# neither is JSON: a captured `tools/list` response -- the input this tool
+# actively recommends when source is unavailable -- contains descriptors and no
+# implementation at all. Calling it `source` handed the review packet exactly
+# the assurance the docstring below says it exists to withhold, on the one
+# workflow most likely to need the warning.
 _CODE_EXT = (".py", ".php", ".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx",
-             ".json", ".sh", ".bash", ".zsh", ".ps1", ".toml")
+             ".sh", ".bash", ".zsh", ".ps1", ".toml")
 
 
-def _evidence_type(files: dict[str, str], skills_detected: bool = False) -> str:
+def _evidence_type(
+    files: dict[str, str],
+    skills_detected: bool = False,
+    manifest_tools: bool = False,
+) -> str:
     """Classify what the input proves; never upgrade docs/source to runtime.
 
     A tree of prose describing an MCP server establishes what the vendor says,
@@ -135,9 +144,10 @@ def _evidence_type(files: dict[str, str], skills_detected: bool = False) -> str:
             return "runtime"
         if data.get("_source"):
             declared = True
-    if declared:
-        return "declared"
     has_code = any(path.lower().endswith(_CODE_EXT) for path in files)
+    if declared or (manifest_tools and not has_code):
+        # Names and schemas from a descriptor list, with no handler behind them.
+        return "declared"
     return "source" if has_code or skills_detected else "documentation"
 
 
@@ -199,7 +209,13 @@ def audit_detailed(
     extraction = extract(files)
     infer_all(extraction.tools, files=files)
     generated_at = _now_iso()
-    evidence_type = _evidence_type(files, skills_detected=extraction.skills_detected)
+    evidence_type = _evidence_type(
+        files,
+        skills_detected=extraction.skills_detected,
+        manifest_tools=any(
+            tool.location.lower().endswith(".json") for tool in extraction.tools
+        ),
+    )
 
     if not extraction.is_mcp_server:
         return (

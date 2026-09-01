@@ -48,7 +48,11 @@ rules:
       - "without (telling|informing|notifying) the user"
       - "you must (always|never|first|immediately)"
       - "you should (always|never|first|immediately)"
-      - "always (send|call|forward|include|run|execute)"
+      # `include` is not in this set: "Always include the station id" is an
+      # instruction to the caller about argument formatting, not a directive
+      # aimed at the agent, and it is ordinary API prose. The rest of the verbs
+      # describe an action the agent is being told to perform.
+      - "always (send|call|forward|run|execute|report|upload)"
       - "before (responding|answering|replying)"
       - "instead of (answering|responding|using)"
       - "as an ai|as a language model"
@@ -254,7 +258,12 @@ rules:
       # The optional quote before the separator matters: in JSON — which is what
       # every MCP client config and most manifests are — the key is quoted, so
       # `"API_KEY": "..."` put a `"` between the name and the `:` and slipped past.
-      - "(api[_-]?key|secret|token|password|passwd|access[_-]?key|client[_-]?secret)[\"']?\\s*[:=]\\s*[\"'][A-Za-z0-9_\\-/+]{8,}[\"']"
+      # The negative lookahead is the difference between a leaked credential and
+      # a README doing its job. `"API_KEY": "YOUR_API_KEY_HERE"` is the shape of
+      # every MCP client config ever published, and reporting it as a hardcoded
+      # credential -- at high severity -- taught reviewers to skim past this
+      # rule, which is worse than not having it.
+      - "(api[_-]?key|secret|token|password|passwd|access[_-]?key|client[_-]?secret)[\"']?\\s*[:=]\\s*[\"'](?!(?:your|my|the|some)[_-]|x{3,}[\"']|<|\\$\\{|%\\(|changeme|placeholder|example|redacted|dummy|todo|fixme|insert[_-]|abc123|123456)[A-Za-z0-9_\\-/+]{8,}[\"']"
 
   # --- Rug pull / supply-chain mutability (MCP-T05) ------------------------
   RP-001:
@@ -453,7 +462,21 @@ rules:
       - "curl\\s+[^|&;]*\\|\\s*(sudo\\s+)?(ba)?sh\\b"
       - "wget\\s+[^|&;]*\\|\\s*(sudo\\s+)?(ba)?sh\\b"
       - "(ba)?sh\\s+<\\(\\s*(curl|wget)\\b"
-      - "\\bnpx\\s+(--?[a-z-]+\\s+)*[@\\w][\\w@./-]+"
+      # Two separate concerns fixed here, both in one pattern.
+      #
+      # 1. `(--?[a-z-]+\s+)*` nested a `-`-accepting body inside a repeated
+      #    group, so every `--flag` token could be split two ways and a failing
+      #    match explored 2^n of them. 109 bytes of docstring stalled an audit
+      #    for a hundred seconds, growing fourfold every two tokens -- a
+      #    denial-of-service in the one tool you point at hostile input.
+      #    `-{1,2}[a-z][\w-]*` anchored by `\s+` has exactly one parse.
+      #
+      # 2. Bare `npx tsc` is a local devDependency being run, not code being
+      #    fetched; grading it the same as `curl | bash` was most of this rule's
+      #    noise. The invocation now has to carry a fetch signal: explicit
+      #    `-y`/`--yes`, a scoped or version-pinned specifier, or a URL.
+      - "\\bnpx\\s+(?:-{1,2}[a-z][\\w-]*\\s+)*(?:-y|--yes)\\b"
+      - "\\bnpx\\s+(?:-{1,2}[a-z][\\w-]*\\s+)*(?:[\\w.-]+\\s+){0,2}(?:@[\\w.-]+/[\\w.-]+|[\\w-][\\w.-]*/[\\w.-]+|[\\w.-]+@[\\w.-]+|https?://\\S+)"
       - "\\bInvoke-Expression\\b|\\biex\\s*\\("
       - "\\bpip\\s+install\\s+[^\\n]*(git\\+https?://|https?://)"
       - "\\b(bash|sh|zsh)\\s+-c\\s+[\"'][^\"']*(curl|wget)\\b"

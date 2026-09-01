@@ -8,7 +8,7 @@
     "mcp-auditor": {
       "command": "python3",
       "args": ["-m", "mcp_auditor.mcp_server"],
-      "env": { "PYTHONPATH": "${CLAUDE_PLUGIN_ROOT}/src" }
+      "env": { "PYTHONPATH": "${CLAUDE_PLUGIN_ROOT}" }
     }
   }
 }

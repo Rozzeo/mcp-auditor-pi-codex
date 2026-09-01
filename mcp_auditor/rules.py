@@ -20,7 +20,7 @@ from yaml.resolver import BaseResolver
 
 from .capabilities import DESTRUCTIVE_CAPABILITIES, MUTATING_CAPABILITIES
 from .source_roles import deployed_files
-from .types import Finding, Tool
+from .types import SEVERITY_ORDER, Finding, Tool
 
 _DEFAULT_SIGNATURES = Path(__file__).with_name("signatures.yaml")
 
@@ -60,8 +60,21 @@ _SECRET_RE = re.compile(
 )
 
 
+# Rules `run_rules` indexes directly rather than behind an `in rules` guard.
+# They are the original core of the engine and every caller assumes they ran;
+# a file missing one used to surface as a bare `KeyError: 'TP-001'` from deep
+# inside the run, naming a rule id and nothing else.
+_REQUIRED_RULES = ("TP-001", "TP-002", "TP-003", "TP-004", "OP-001", "OP-002", "ME-001")
+
+
 def load_signatures(path: str | Path | None = None) -> dict[str, Any]:
-    """Load the signature set from YAML (defaults to the bundled file)."""
+    """Load the signature set from YAML (defaults to the bundled file).
+
+    Validates here rather than at match time. A signature file is user-supplied
+    input -- `--signatures` exists so a reviewer can pin or fork one -- and the
+    failures it produces are worth naming: a missing core rule, or a severity
+    the scorer does not weigh.
+    """
     target = Path(path) if path else _DEFAULT_SIGNATURES
     try:
         with open(target, "r", encoding="utf-8") as fh:
@@ -70,6 +83,29 @@ def load_signatures(path: str | Path | None = None) -> dict[str, Any]:
         raise ValueError(f"Invalid signature file: {target}: {exc}") from exc
     if not isinstance(data, dict) or "rules" not in data:
         raise ValueError(f"Invalid signature file: {target}")
+
+    rules = data["rules"]
+    if not isinstance(rules, dict):
+        raise ValueError(f"Invalid signature file: {target}: 'rules' must be a mapping")
+
+    missing = [rule_id for rule_id in _REQUIRED_RULES if rule_id not in rules]
+    if missing:
+        raise ValueError(
+            f"Invalid signature file: {target}: missing required rule(s) "
+            f"{', '.join(missing)}. These run unconditionally; a set without "
+            f"them would silently detect less than it appears to."
+        )
+
+    # An unrecognized severity weighs 0 in the scorer and is absent from the
+    # summary, so a typo'd one produced findings that were invisible to both
+    # while still appearing in the list. Fail on it instead.
+    for rule_id, rule in rules.items():
+        severity = rule.get("severity") if isinstance(rule, dict) else None
+        if severity is not None and severity not in SEVERITY_ORDER:
+            raise ValueError(
+                f"Invalid signature file: {target}: rule {rule_id} has severity "
+                f"{severity!r}; expected one of {', '.join(SEVERITY_ORDER)}"
+            )
     return data
 
 
@@ -225,6 +261,37 @@ def _first_match(patterns: Iterable[str], text: str) -> str | None:
     return None
 
 
+# A negator, followed by anything that is not a clause boundary, ending exactly
+# where the match begins. Bounded lookback rather than whole-sentence: a
+# disclaimer in one clause must not excuse a capability described in the next.
+_NEGATED_BY = re.compile(
+    r"\b(?:never|not|n't|cannot|nor|without|no)\b[^.;:!?]{0,48}\Z",
+    re.IGNORECASE,
+)
+
+
+def _first_affirmative_match(patterns: Iterable[str], text: str) -> str | None:
+    """The first match a negator does not govern.
+
+    The name-versus-description rules ask "does this description claim an
+    action the name hides?" -- a question that inverts under negation.
+    "Read-only: this tool never creates, updates or deletes anything" contains
+    the word `deletes`, and matching it reported an honest read-only tool as a
+    disguised destructive one, at critical. The clearer the docstring, the
+    worse the score; a rule that punishes careful documentation gets the
+    documentation removed, not improved.
+    """
+    # Collapsed first: a docstring wraps mid-sentence, and a line break is not
+    # a clause boundary. Without this, "never\ncreates, updates or deletes"
+    # read as two clauses and the disclaimer stopped governing the verbs.
+    flat = re.sub(r"\s+", " ", text)
+    for pat in patterns:
+        for m in re.finditer(pat, flat, re.IGNORECASE):
+            if not _NEGATED_BY.search(flat[: m.start()]):
+                return m.group(0)
+    return None
+
+
 @lru_cache(maxsize=64)
 def _combined(patterns: tuple[str, ...]) -> re.Pattern:
     """One precompiled alternation for file-level rules — those scan every byte
@@ -275,7 +342,7 @@ def _tp004(tool: Tool, rule: dict) -> list[Finding]:
     benign = set(rule.get("benign_name_hints", []))
     if not (tokens & benign):
         return []
-    hit = _first_match(rule.get("disguised_action_patterns", []), tool.description)
+    hit = _first_affirmative_match(rule.get("disguised_action_patterns", []), tool.description)
     if not hit:
         return []
     return [_make(rule, "TP-004", tool, f"name '{tool.name}' but description: {hit}")]
@@ -286,7 +353,7 @@ def _op001(tool: Tool, rule: dict) -> list[Finding]:
     read_hints = set(rule.get("read_name_hints", []))
     if not (tokens & read_hints):
         return []
-    hit = _first_match(rule.get("write_action_patterns", []), tool.description)
+    hit = _first_affirmative_match(rule.get("write_action_patterns", []), tool.description)
     if not hit:
         return []
     return [_make(rule, "OP-001", tool, f"read-style name '{tool.name}' but description: {hit}")]
